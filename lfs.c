@@ -3413,11 +3413,17 @@ static lfs_ssize_t flushedwrite_find_block(lfs_t *lfs, lfs_file_t *file, const u
 static lfs_ssize_t lfs_file_flushedwrite(lfs_t *lfs, lfs_file_t *file,
         const void *buffer, lfs_size_t size) {
     const uint8_t *data = buffer;
-    lfs_size_t tmp_size = size;
-    lfs_size_t *nsize = &tmp_size;
+    lfs_size_t nsize = size;
+
+    // TODO take the correct context here, just a dummy
+    lfs->lsf_cb_context[0].lfs   = lfs;
+    lfs->lsf_cb_context[0].file  = file;
+    lfs->lsf_cb_context[0].data  = &data;
+    lfs->lsf_cb_context[0].nsize = nsize;
+    lfs_size_t *nsize_ptr = &lfs->lsf_cb_context[0].nsize;
 
     if ((file->flags & LFS_F_INLINE) &&
-            lfs_max(file->pos+*nsize, file->ctz.size) >
+            lfs_max(file->pos+nsize, file->ctz.size) >
             lfs_min(0x3fe, lfs_min(
                 lfs->cfg->cache_size,
                 (lfs->cfg->metadata_max ?
@@ -3429,7 +3435,7 @@ static lfs_ssize_t lfs_file_flushedwrite(lfs_t *lfs, lfs_file_t *file,
             return err;
         }
     }
-    int err = flushedwrite_find_block(lfs, file, &data, nsize);
+    int err = flushedwrite_find_block(lfs, file, &data, nsize_ptr);
     if (err) {
         return err;
     }

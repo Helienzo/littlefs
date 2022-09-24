@@ -33,6 +33,7 @@ extern "C"
 #define LFS_DISK_VERSION 0x00020000
 #define LFS_DISK_VERSION_MAJOR (0xffff & (LFS_DISK_VERSION >> 16))
 #define LFS_DISK_VERSION_MINOR (0xffff & (LFS_DISK_VERSION >>  0))
+#define CB_STACK_SIZE 10
 
 
 /// Definitions ///
@@ -430,7 +431,7 @@ typedef struct lfs {
         struct lfs *lfs;
         lfs_file_t *file;
         const uint8_t **data;
-        lfs_size_t *nsize;
+        lfs_size_t nsize;
         lfs_cache_t *pcache;
         lfs_cache_t *rcache;
         lfs_block_t head;
@@ -438,7 +439,7 @@ typedef struct lfs {
         lfs_block_t *block;
         lfs_off_t *off;
         lfs_block_t *nblock;
-   } lsf_cb_context[10];
+   } lsf_cb_context[CB_STACK_SIZE];
 } lfs_t;
 
 

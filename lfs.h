@@ -453,10 +453,6 @@ struct lfs {
             lfs_off_t *off;
             lfs_block_t nblock;
         } ctx_extend;
-        struct lfs_bd_erase{
-            // TODO just a place holder
-            lfs_size_t size;
-        } bd_erase;
    } workspace;
 };
 

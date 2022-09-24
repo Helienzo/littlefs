@@ -2687,8 +2687,16 @@ static int lfs_ctz_find(lfs_t *lfs,
 }
 
 #ifndef LFS_READONLY
-// ********************* CTZ EXTEND *********************
+// ********************* CTZ_EXTEND *********************
 static int ctz_extend_alloc(lfs_t *lfs);
+static int ctz_extend_register_callback(lfs_t *lfs, lfs_ssize_t (*cb)(struct lfs *lfs, lfs_ssize_t retval));
+static int ctz_extend_done(lfs_t *lfs, int retval);
+static int ctz_extend_relocate(lfs_t *lfs);
+static int ctz_extend_append(lfs_t *lfs);
+static int ctz_extend_copy_out(lfs_t *lfs);
+static int ctz_extend_nothing_to_write(lfs_t *lfs);
+static int ctz_erase_cb(const struct lfs_config *c, int err_code);
+static int ctz_extend_block_erase(lfs_t *lfs);
 
 static int ctz_extend_register_callback(lfs_t *lfs, lfs_ssize_t (*cb)(struct lfs *lfs, lfs_ssize_t retval)) {
     if (cb != NULL) {
@@ -2757,7 +2765,6 @@ static int ctz_extend_append(lfs_t *lfs) {
         return ctz_extend_done(lfs, LFS_ERR_OK);
 }
 
-
 static int ctz_extend_copy_out(lfs_t *lfs) {
 
         lfs_size_t noff = lfs->workspace.ctx_extend.size - 1;
@@ -2799,7 +2806,6 @@ static int ctz_extend_copy_out(lfs_t *lfs) {
        return ctz_extend_append(lfs);
 }
 
-
 static int ctz_extend_nothing_to_write(lfs_t *lfs) {
     if (lfs->workspace.ctx_extend.size == 0) {
         *lfs->workspace.ctx_extend.block = lfs->workspace.ctx_extend.nblock;
@@ -2810,7 +2816,6 @@ static int ctz_extend_nothing_to_write(lfs_t *lfs) {
 
     return ctz_extend_copy_out(lfs);
 }
-
 
 static int ctz_erase_cb(const struct lfs_config *c, int err_code) {
     // Reset the callback
@@ -2878,7 +2883,7 @@ static int lfs_ctz_extend(lfs_t *lfs,
     // alloc block
     return ctz_extend_alloc(lfs);
 }
-// ********************* CTZ EXTEND *********************
+// ********************* CTZ_EXTEND *********************
 #endif
 
 static int lfs_ctz_traverse(lfs_t *lfs,
@@ -3421,6 +3426,7 @@ static lfs_ssize_t flushedwrite_find_block(lfs_t *lfs);
 static lfs_ssize_t flushedwrite_write_block(lfs_t *lfs);
 static lfs_ssize_t flushedwrite_done(lfs_t *lfs, lfs_ssize_t retval);
 static lfs_ssize_t flushedwrite_ctx_extend_done(lfs_t *lfs, lfs_ssize_t retval);
+static lfs_ssize_t flushedwrite_register_callback(lfs_t *lfs, lfs_ssize_t (*cb)(struct lfs *lfs, lfs_ssize_t retval));
 
 static lfs_ssize_t flushedwrite_write_block(lfs_t *lfs) {
 
@@ -3557,6 +3563,10 @@ static lfs_ssize_t flushedwrite_register_callback(lfs_t *lfs, lfs_ssize_t (*cb)(
 // ********************* FLUSHEDWRITE *********************
 
 // ********************* RAWWRITE *********************
+static lfs_ssize_t rawwrite_register_callback(lfs_t *lfs, lfs_ssize_t (*cb)(struct lfs *lfs, lfs_ssize_t retval));
+static lfs_ssize_t file_rawwrite_done(lfs_t *lfs, lfs_ssize_t retval);
+static lfs_ssize_t rawwrite_fill_with_zero(lfs_t *lfs, lfs_ssize_t retval);
+
 static lfs_ssize_t rawwrite_register_callback(lfs_t *lfs, lfs_ssize_t (*cb)(struct lfs *lfs, lfs_ssize_t retval)) {
     if (cb != NULL) {
         lfs->workspace.rawwrite.rawwrite_done_cb = cb;
@@ -3608,7 +3618,6 @@ static lfs_ssize_t rawwrite_fill_with_zero(lfs_t *lfs, lfs_ssize_t retval) {
     }
 
 }
-
 
 static lfs_ssize_t lfs_file_rawwrite(lfs_t *lfs, lfs_file_t *file,
         const void *buffer, lfs_size_t size) {

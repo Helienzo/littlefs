@@ -2821,9 +2821,20 @@ static int ctz_extend_nothing_to_write(lfs_t *lfs) {
 }
 
 
+static int ctz_erase_cb(const struct lfs_config *c, int err_code) {
+    // TODO propagte error
+    UNUSED(err_code);
+    return (*c->current_lfs)->ctz_extend_next(*c->current_lfs);
+}
+
 static int ctz_extend_block_erase(lfs_t *lfs) {
        // Prepare the next call
         lfs->ctz_extend_next = ctz_extend_nothing_to_write;
+
+        // Prepare for non blocking call, set the erase cb
+        lfs->lfs_bd_callbacks.erase_cb = ctz_erase_cb;
+        // Store the current lfs context
+        *(lfs->cfg->current_lfs) = lfs->workspace.lfs;
 
         // erase block
         int err = lfs_bd_erase(lfs, lfs->workspace.nblock);
@@ -2846,7 +2857,7 @@ static int ctz_extend_block_erase(lfs_t *lfs) {
         }
         else {
 #if defined(FAKE_NON_BLOCKING)
-            return lfs->ctz_extend_next(lfs);
+            return lfs->lfs_bd_callbacks.erase_cb(lfs->cfg, LFS_ERR_OK);
 #else
             // If this is a non blocking call we just return
             return LFS_ERR_OK;
@@ -2871,8 +2882,6 @@ static int lfs_ctz_extend(lfs_t *lfs,
         lfs_block_t head, lfs_size_t size,
         lfs_block_t *block, lfs_off_t *off) {
 
-    // Store the context
-    lfs->workspace.lfs    = lfs;
     lfs->workspace.pcache = pcache;
     lfs->workspace.rcache = rcache;
     lfs->workspace.head   = head;

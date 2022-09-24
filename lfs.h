@@ -152,13 +152,16 @@ enum lfs_whence_flags {
     LFS_SEEK_END = 2,   // Seek relative to the end of the file
 };
 
+// Forward declaration of filesystem structure
+typedef struct lfs lfs_t;
 
 // Configuration provided during initialization of the littlefs
 struct lfs_config {
     // Opaque user provided context that can be used to pass
     // information to the block device operations
     void *context;
-
+    // Used to pass the current filesystem that is under processing
+    lfs_t **current_lfs;
     // Read a region in a block. Negative error codes are propagated
     // to the user.
     int (*read)(const struct lfs_config *c, lfs_block_t block,
@@ -384,7 +387,7 @@ typedef struct lfs_gstate {
 } lfs_gstate_t;
 
 // The littlefs filesystem type
-typedef struct lfs {
+struct lfs {
     lfs_cache_t rcache;
     lfs_cache_t pcache;
 
@@ -419,7 +422,7 @@ typedef struct lfs {
 #endif
 
     union {
-        void (*erase_cb)(struct lfs *lfs, const struct lfs_config *c, int err_code);
+        int (*erase_cb)(const struct lfs_config *c, int err_code);
     } lfs_bd_callbacks;
 
     lfs_ssize_t (*flushedwrite_next)(struct lfs *lfs);
@@ -441,7 +444,7 @@ typedef struct lfs {
         lfs_off_t *off;
         lfs_block_t nblock;
    } workspace;
-} lfs_t;
+};
 
 /// Filesystem functions ///
 

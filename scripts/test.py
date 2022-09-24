@@ -72,6 +72,7 @@ GLOBALS = """
 #include <stdio.h>
 extern const char *lfs_testbd_path;
 extern uint32_t lfs_testbd_cycles;
+static lfs_t *lfs_ptr = {0};
 """
 DEFINES = {
     'LFS_READ_SIZE': 16,
@@ -99,6 +100,7 @@ PROLOGUE = """
     
     __attribute__((unused)) const struct lfs_config cfg = {
         .context        = &bd,
+        .current_lfs    = &lfs_ptr,
         .read           = lfs_testbd_read,
         .prog           = lfs_testbd_prog,
         .erase          = lfs_testbd_erase,

@@ -429,6 +429,15 @@ struct lfs {
         // Common for all steps
         struct lfs *lfs;
         lfs_file_t *file;
+        // file_flush
+        struct lfs_file_flush {
+            lfs_ssize_t (*file_flush_done_cb)(struct lfs *lfs, lfs_ssize_t retval);
+            // TODO this seems very inefficent, lfs_file_t is a big struct..
+            lfs_file_t orig;
+            lfs_off_t pos;
+            uint8_t data;
+        } file_flush;
+        // Rawwrite
         struct lfs_rawwrite {
             lfs_ssize_t (*rawwrite_done_cb)(struct lfs *lfs, lfs_ssize_t retval);
             lfs_size_t size;

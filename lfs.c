@@ -3208,7 +3208,112 @@ static int lfs_file_outline(lfs_t *lfs, lfs_file_t *file) {
 }
 #endif
 
+// Declare FLUSHEDWRITE cb register function
+static lfs_ssize_t flushedwrite_register_callback(lfs_t *lfs, lfs_ssize_t (*cb)(struct lfs *lfs, lfs_ssize_t retval));
+
+// ********************* FILE_FLUSH *********************
+static int file_flush_copy(lfs_t *lfs);
+static int file_flush_writeout(lfs_t *lfs);
+static int file_flush_relocate(lfs_t *lfs);
+static int file_flush_done(lfs_t *lfs, int retval);
+static lfs_ssize_t file_flush_register_callback(lfs_t *lfs, lfs_ssize_t (*cb)(struct lfs *lfs, lfs_ssize_t retval));
+
+static lfs_ssize_t file_flush_register_callback(lfs_t *lfs, lfs_ssize_t (*cb)(struct lfs *lfs, lfs_ssize_t retval)) {
+    if (cb != NULL) {
+        lfs->workspace.file_flush.file_flush_done_cb = cb;
+        return LFS_ERR_OK;
+    }
+    else {
+        lfs->workspace.file_flush.file_flush_done_cb = NULL;
+        return LFS_ERR_INVAL;
+    }
+}
+
+static lfs_ssize_t file_flush_flushedwrite_done_cb(lfs_t *lfs, lfs_ssize_t retval) {
+    if (retval < 0) {
+        return file_flush_done(lfs, retval);
+    }
+
+    // keep our reference to the rcache in sync
+    if (lfs->rcache.block != LFS_BLOCK_NULL) {
+        lfs_cache_drop(lfs, &lfs->workspace.file_flush.orig.cache);
+        lfs_cache_drop(lfs, &lfs->rcache);
+    }
+    // We might have to run copy again
+    return file_flush_copy(lfs);
+}
+
+static int file_flush_copy(lfs_t *lfs) {
+    if (lfs->workspace.file->pos < lfs->workspace.file->ctz.size) {
+        // copy over a byte at a time, leave it up to caching
+        // to make this efficient
+        lfs_ssize_t res = lfs_file_flushedread(lfs, &lfs->workspace.file_flush.orig, &lfs->workspace.file_flush.data, 1);
+        if (res < 0) {
+            return file_flush_done(lfs, res);
+        }
+
+        // register next state in file_flush
+        flushedwrite_register_callback(lfs, file_flush_flushedwrite_done_cb);
+        return lfs_file_flushedwrite(lfs, lfs->workspace.file, &lfs->workspace.file_flush.data, 1);
+    }
+    else {
+        // Call next state
+        return file_flush_writeout(lfs);
+    }
+}
+
+static int file_flush_relocate(lfs_t *lfs) {
+    LFS_DEBUG("Bad block at 0x%"PRIx32, lfs->workspace.file->block);
+    int err = lfs_file_relocate(lfs, lfs->workspace.file);
+    if (err) {
+        // Finding new block failed
+        return file_flush_done(lfs, err);
+    }
+    // Try to write to new block
+    return file_flush_writeout(lfs);
+}
+
+static int file_flush_writeout(lfs_t *lfs) {
+    // write out what we have
+    int err = lfs_bd_flush(lfs, &lfs->workspace.file->cache, &lfs->rcache, true);
+    if (err) {
+        if (err == LFS_ERR_CORRUPT) {
+            // Find a different block
+            return file_flush_relocate(lfs);
+        }
+        // Command failed
+        return file_flush_done(lfs, err);
+    }
+    // Command successful, call last step
+    return file_flush_done(lfs, LFS_ERR_OK);
+}
+
+static int file_flush_done(lfs_t *lfs, int retval) {
+    if (retval == LFS_ERR_OK) {
+        // actual file updates, if the command was successfull
+        lfs->workspace.file->ctz.head = lfs->workspace.file->block;
+        lfs->workspace.file->ctz.size = lfs->workspace.file->pos;
+        lfs->workspace.file->flags &= ~LFS_F_WRITING;
+        lfs->workspace.file->flags |= LFS_F_DIRTY;
+
+        lfs->workspace.file->pos = lfs->workspace.file_flush.pos;
+    }
+
+    if (lfs->workspace.file_flush.file_flush_done_cb != NULL) {
+        // Call caller if this was a non blocking call
+        return lfs->workspace.file_flush.file_flush_done_cb(lfs, retval);
+    }
+    else {
+        return retval;
+    }
+}
+
 static int lfs_file_flush(lfs_t *lfs, lfs_file_t *file) {
+    // TODO tmp, store ptr to the file and context
+    lfs->workspace.file = file;
+    lfs->workspace.lfs  = lfs;
+    // TODO above .. not needed
+
     if (file->flags & LFS_F_READING) {
         if (!(file->flags & LFS_F_INLINE)) {
             lfs_cache_drop(lfs, &file->cache);
@@ -3218,77 +3323,33 @@ static int lfs_file_flush(lfs_t *lfs, lfs_file_t *file) {
 
 #ifndef LFS_READONLY
     if (file->flags & LFS_F_WRITING) {
-        lfs_off_t pos = file->pos;
+        lfs->workspace.file_flush.pos = file->pos;
 
         if (!(file->flags & LFS_F_INLINE)) {
             // copy over anything after current branch
-            lfs_file_t orig = {
-                .ctz.head = file->ctz.head,
-                .ctz.size = file->ctz.size,
-                .flags = LFS_O_RDONLY,
-                .pos = file->pos,
-                .cache = lfs->rcache,
-            };
+            // Store context
+            lfs->workspace.file_flush.orig.ctz.head = file->ctz.head;
+            lfs->workspace.file_flush.orig.ctz.size = file->ctz.size;
+            lfs->workspace.file_flush.orig.flags = LFS_O_RDONLY;
+            lfs->workspace.file_flush.orig.pos = file->pos;
+            lfs->workspace.file_flush.orig.cache = lfs->rcache;
+
             lfs_cache_drop(lfs, &lfs->rcache);
-
-            while (file->pos < file->ctz.size) {
-                // copy over a byte at a time, leave it up to caching
-                // to make this efficient
-                uint8_t data;
-                lfs_ssize_t res = lfs_file_flushedread(lfs, &orig, &data, 1);
-                if (res < 0) {
-                    return res;
-                }
-
-                res = lfs_file_flushedwrite(lfs, file, &data, 1);
-                if (res < 0) {
-                    return res;
-                }
-
-                // keep our reference to the rcache in sync
-                if (lfs->rcache.block != LFS_BLOCK_NULL) {
-                    lfs_cache_drop(lfs, &orig.cache);
-                    lfs_cache_drop(lfs, &lfs->rcache);
-                }
-            }
-
-            // write out what we have
-            while (true) {
-                int err = lfs_bd_flush(lfs, &file->cache, &lfs->rcache, true);
-                if (err) {
-                    if (err == LFS_ERR_CORRUPT) {
-                        goto relocate;
-                    }
-                    return err;
-                }
-
-                break;
-
-relocate:
-                LFS_DEBUG("Bad block at 0x%"PRIx32, file->block);
-                err = lfs_file_relocate(lfs, file);
-                if (err) {
-                    return err;
-                }
-            }
+            // TODO call copy
+            return file_flush_copy(lfs);
         } else {
             file->pos = lfs_max(file->pos, file->ctz.size);
+            return file_flush_done(lfs, LFS_ERR_OK);
         }
-
-        // actual file updates
-        file->ctz.head = file->block;
-        file->ctz.size = file->pos;
-        file->flags &= ~LFS_F_WRITING;
-        file->flags |= LFS_F_DIRTY;
-
-        file->pos = pos;
     }
 #endif
 
     return 0;
 }
+// ********************* FILE_FLUSH *********************
 
 #ifndef LFS_READONLY
+// ********************* RAWSYNC *********************
 static int lfs_file_rawsync(lfs_t *lfs, lfs_file_t *file) {
     if (file->flags & LFS_F_ERRED) {
         // it's not safe to do anything if our file errored
@@ -3339,6 +3400,7 @@ static int lfs_file_rawsync(lfs_t *lfs, lfs_file_t *file) {
 
     return 0;
 }
+// ********************* RAWSYNC *********************
 #endif
 
 static lfs_ssize_t lfs_file_flushedread(lfs_t *lfs, lfs_file_t *file,
@@ -3426,7 +3488,6 @@ static lfs_ssize_t flushedwrite_find_block(lfs_t *lfs);
 static lfs_ssize_t flushedwrite_write_block(lfs_t *lfs);
 static lfs_ssize_t flushedwrite_done(lfs_t *lfs, lfs_ssize_t retval);
 static lfs_ssize_t flushedwrite_ctx_extend_done(lfs_t *lfs, lfs_ssize_t retval);
-static lfs_ssize_t flushedwrite_register_callback(lfs_t *lfs, lfs_ssize_t (*cb)(struct lfs *lfs, lfs_ssize_t retval));
 
 static lfs_ssize_t flushedwrite_write_block(lfs_t *lfs) {
 
@@ -5528,11 +5589,13 @@ int lfs_format(lfs_t *lfs, const struct lfs_config *cfg) {
             cfg->read_buffer, cfg->prog_buffer, cfg->lookahead_buffer,
             cfg->name_max, cfg->file_max, cfg->attr_max);
 
+    // TODO this must be done at a better place
     // Init callbacks to null
     lfs->lfs_bd_callbacks.erase_cb = NULL;
     ctz_extend_register_callback(lfs, NULL);
     flushedwrite_register_callback(lfs, NULL);
     lfs_register_command_done_callback(lfs, NULL);
+    file_flush_register_callback(lfs, NULL);
 
     err = lfs_rawformat(lfs, cfg);
 

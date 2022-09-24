@@ -13,7 +13,7 @@
 #define LFS_BLOCK_NULL ((lfs_block_t)-1)
 #define LFS_BLOCK_INLINE ((lfs_block_t)-2)
 #define UNUSED(x) (void)(x)
-//#define SET_CB
+
 enum {
     LFS_OK_RELOCATED = 1,
     LFS_OK_DROPPED   = 2,
@@ -5674,14 +5674,6 @@ int lfs_removeattr(lfs_t *lfs, const char *path, uint8_t type) {
 #endif
 
 #ifndef LFS_NO_MALLOC
-// TODO dummy fake cb funciton
-#if defined(SET_CB)
-static lfs_ssize_t action_complete_cb(lfs_t *lfs, lfs_ssize_t err_code) {
-    UNUSED(lfs);
-    return err_code;
-}
-#endif
-
 int lfs_register_command_done_callback(lfs_t *lfs, lfs_ssize_t (*cb)(lfs_t *lfs, lfs_ssize_t err_code)) {
 
     if (cb != NULL) {
@@ -5703,12 +5695,8 @@ int lfs_file_open(lfs_t *lfs, lfs_file_t *file, const char *path, int flags) {
             (void*)lfs, (void*)file, path, flags);
     LFS_ASSERT(!lfs_mlist_isopen(lfs->mlist, (struct lfs_mlist*)file));
 
-    // Temp init the action_complete_cb to NULL;
-#if defined(SET_CB)
-    lfs_register_command_done_callback(lfs, action_complete_cb);
-#else
+    // TODO remove init the action_complete_cb to NULL;
     lfs_register_command_done_callback(lfs, NULL);
-#endif
     err = lfs_file_rawopen(lfs, file, path, flags);
 
     LFS_TRACE("lfs_file_open -> %d", err);

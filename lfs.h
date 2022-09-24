@@ -716,6 +716,11 @@ lfs_ssize_t lfs_fs_size(lfs_t *lfs);
 // Returns a negative error code on failure.
 int lfs_fs_traverse(lfs_t *lfs, int (*cb)(void*, lfs_block_t), void *data);
 
+// Register callback for non blocking call
+// This makes the next call non blocking, must be called once per
+// non blocking call.
+// TODO Currently only lfs_file_write supports non blocking calls
+int lfs_register_command_done_callback(lfs_t *lfs, lfs_ssize_t (*cb)(lfs_t *lfs, lfs_ssize_t err_code));
 #ifndef LFS_READONLY
 #ifdef LFS_MIGRATE
 // Attempts to migrate a previous version of littlefs

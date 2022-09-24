@@ -134,6 +134,17 @@ lfs_testbd_swear_t lfs_testbd_getwear(const struct lfs_config *cfg,
 int lfs_testbd_setwear(const struct lfs_config *cfg,
         lfs_block_t block, lfs_testbd_wear_t wear);
 
+// Callback used to test asyncronus commands
+lfs_ssize_t lfs_testbd_action_complete_cb(lfs_t *lfs, lfs_ssize_t err_code);
+
+// Get latest err code set on action_complete_cb
+lfs_ssize_t lfs_testbd_get_cb_val(void);
+
+// Check if any bd commands are queued
+bool lfs_testbd_call_queued(void);
+
+// Step the bd device during asyncronus work
+int lfs_testbd_step(void);
 
 #ifdef __cplusplus
 } /* extern "C" */

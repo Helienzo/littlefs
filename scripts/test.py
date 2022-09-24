@@ -72,7 +72,7 @@ GLOBALS = """
 #include <stdio.h>
 extern const char *lfs_testbd_path;
 extern uint32_t lfs_testbd_cycles;
-static lfs_t *lfs_ptr = {0};
+__attribute__((unused)) static lfs_t *lfs_ptr = {0};
 """
 DEFINES = {
     'LFS_READ_SIZE': 16,

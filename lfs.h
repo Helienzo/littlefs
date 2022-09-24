@@ -34,7 +34,6 @@ extern "C"
 #define LFS_DISK_VERSION_MAJOR (0xffff & (LFS_DISK_VERSION >> 16))
 #define LFS_DISK_VERSION_MINOR (0xffff & (LFS_DISK_VERSION >>  0))
 
-
 /// Definitions ///
 
 // Type definitions
@@ -153,13 +152,16 @@ enum lfs_whence_flags {
     LFS_SEEK_END = 2,   // Seek relative to the end of the file
 };
 
+// Forward declaration of filesystem structure
+typedef struct lfs lfs_t;
 
 // Configuration provided during initialization of the littlefs
 struct lfs_config {
     // Opaque user provided context that can be used to pass
     // information to the block device operations
     void *context;
-
+    // Used to pass the current filesystem that is under processing
+    lfs_t **current_lfs;
     // Read a region in a block. Negative error codes are propagated
     // to the user.
     int (*read)(const struct lfs_config *c, lfs_block_t block,
@@ -384,7 +386,7 @@ typedef struct lfs_gstate {
 } lfs_gstate_t;
 
 // The littlefs filesystem type
-typedef struct lfs {
+struct lfs {
     lfs_cache_t rcache;
     lfs_cache_t pcache;
 
@@ -417,8 +419,42 @@ typedef struct lfs {
 #ifdef LFS_MIGRATE
     struct lfs1 *lfs1;
 #endif
-} lfs_t;
 
+    lfs_ssize_t (*action_complete_cb)(struct lfs *lfs, lfs_ssize_t err_code);
+    union {
+        int (*erase_cb)(const struct lfs_config *c, int err_code);
+    } lfs_bd_callbacks;
+
+    struct lsf_workspace {
+        // Common for all steps
+        struct lfs *lfs;
+        lfs_file_t *file;
+        struct lfs_rawwrite {
+            lfs_ssize_t (*rawwrite_done_cb)(struct lfs *lfs, lfs_ssize_t retval);
+            lfs_size_t size;
+            const uint8_t *buffer;
+            lfs_off_t pos;
+        } rawwrite;
+        // Flushedwrite
+        struct lfs_flushedwrite {
+            lfs_ssize_t (*flushedwrite_done_cb)(struct lfs *lfs, lfs_ssize_t retval);
+            const uint8_t *data_ptr;
+            lfs_size_t nsize;
+            lfs_size_t size;
+        } flushedwrite;
+        // ctz_extend
+        struct lfs_ctx_extend {
+            lfs_ssize_t (*ctz_extend_done_cb)(struct lfs *lfs, lfs_ssize_t retval);
+            lfs_cache_t *pcache;
+            lfs_cache_t *rcache;
+            lfs_block_t head;
+            lfs_size_t size;
+            lfs_block_t *block;
+            lfs_off_t *off;
+            lfs_block_t nblock;
+        } ctx_extend;
+   } workspace;
+};
 
 /// Filesystem functions ///
 
@@ -676,6 +712,11 @@ lfs_ssize_t lfs_fs_size(lfs_t *lfs);
 // Returns a negative error code on failure.
 int lfs_fs_traverse(lfs_t *lfs, int (*cb)(void*, lfs_block_t), void *data);
 
+// Register callback for non blocking call
+// This makes the next call non blocking, must be called once per
+// non blocking call.
+// TODO Currently only lfs_file_write supports non blocking calls
+int lfs_register_command_done_callback(lfs_t *lfs, lfs_ssize_t (*cb)(lfs_t *lfs, lfs_ssize_t err_code));
 #ifndef LFS_READONLY
 #ifdef LFS_MIGRATE
 // Attempts to migrate a previous version of littlefs

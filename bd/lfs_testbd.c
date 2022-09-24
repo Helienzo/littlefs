@@ -10,6 +10,20 @@
 
 #include <stdlib.h>
 
+static const struct lfs_config *glob_cfg = NULL;
+static lfs_block_t glob_block = 0;
+static bool glob_call_queued = false;
+static lfs_ssize_t glob_err_code = 0;
+
+lfs_ssize_t lfs_testbd_action_complete_cb(lfs_t *lfs, lfs_ssize_t err_code) {
+    (void)lfs;
+    glob_err_code = err_code;
+    return err_code;
+}
+
+lfs_ssize_t lfs_testbd_get_cb_val(void) {
+    return glob_err_code;
+}
 
 int lfs_testbd_createcfg(const struct lfs_config *cfg, const char *path,
         const struct lfs_testbd_config *bdcfg) {
@@ -218,7 +232,14 @@ int lfs_testbd_prog(const struct lfs_config *cfg, lfs_block_t block,
     return 0;
 }
 
-int lfs_testbd_erase(const struct lfs_config *cfg, lfs_block_t block) {
+static int queue_blocking_call(const struct lfs_config *cfg, lfs_block_t block) {
+    glob_cfg = cfg;
+    glob_block = block;
+    glob_call_queued = true;
+    return 0;
+}
+
+static int lfs_testbd_erase_blocking(const struct lfs_config *cfg, lfs_block_t block) {
     LFS_TESTBD_TRACE("lfs_testbd_erase(%p, 0x%"PRIx32")", (void*)cfg, block);
     lfs_testbd_t *bd = cfg->context;
 
@@ -236,6 +257,7 @@ int lfs_testbd_erase(const struct lfs_config *cfg, lfs_block_t block) {
                     LFS_TESTBD_BADBLOCK_ERASENOOP) {
                 LFS_TESTBD_TRACE("lfs_testbd_erase -> %d", 0);
                 return 0;
+
             }
         } else {
             // mark wear
@@ -260,9 +282,30 @@ int lfs_testbd_erase(const struct lfs_config *cfg, lfs_block_t block) {
             exit(33);
         }
     }
-
     LFS_TESTBD_TRACE("lfs_testbd_prog -> %d", 0);
     return 0;
+}
+
+bool lfs_testbd_call_queued(void) {
+    return glob_call_queued;
+}
+
+int lfs_testbd_step(void) {
+
+    glob_call_queued = false;
+    LFS_ASSERT(glob_cfg != NULL);
+    LFS_ASSERT( (*glob_cfg->current_lfs)->lfs_bd_callbacks.erase_cb != NULL );
+    int res = lfs_testbd_erase_blocking(glob_cfg, glob_block);
+
+    return (*glob_cfg->current_lfs)->lfs_bd_callbacks.erase_cb(glob_cfg, res);
+}
+
+int lfs_testbd_erase(const struct lfs_config *cfg, lfs_block_t block) {
+
+    if ((*cfg->current_lfs)->lfs_bd_callbacks.erase_cb != NULL) {
+        return queue_blocking_call(cfg, block);
+    }
+    return lfs_testbd_erase_blocking(cfg, block);
 }
 
 int lfs_testbd_sync(const struct lfs_config *cfg) {

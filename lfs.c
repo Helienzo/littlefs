@@ -3322,13 +3322,94 @@ static lfs_ssize_t lfs_file_rawread(lfs_t *lfs, lfs_file_t *file,
 
 
 #ifndef LFS_READONLY
+
+static lfs_ssize_t flushedwrite_find_block(lfs_t *lfs, lfs_file_t *file, const uint8_t **data, lfs_size_t *nsize);
+static lfs_ssize_t flushedwrite_write_block(lfs_t *lfs, lfs_file_t *file, const uint8_t **data, lfs_size_t *nsize);
+
+static lfs_ssize_t flushedwrite_write_block(lfs_t *lfs, lfs_file_t *file, const uint8_t **data, lfs_size_t *nsize) {
+        lfs_size_t diff = lfs_min(*nsize, lfs->cfg->block_size - file->off);
+        while (true) {
+            int err = lfs_bd_prog(lfs, &file->cache, &lfs->rcache, true,
+                    file->block, file->off, *data, diff);
+            if (err) {
+                if (err == LFS_ERR_CORRUPT) {
+                    err = lfs_file_relocate(lfs, file);
+                    if (err) {
+                        file->flags |= LFS_F_ERRED;
+                        return err;
+                    }
+                    continue;
+                }
+                file->flags |= LFS_F_ERRED;
+                return err;
+            }
+            break;
+        }
+
+        file->pos += diff;
+        file->off += diff;
+        *data += diff;
+        *nsize -= diff;
+        lfs_alloc_ack(lfs);
+    if (*nsize > 0) {
+        int err = flushedwrite_find_block(lfs, file, data, nsize);
+        return err;
+    }
+    else {
+        return LFS_ERR_OK;
+    }
+}
+
+static lfs_ssize_t flushedwrite_find_block(lfs_t *lfs, lfs_file_t *file, const uint8_t **data, lfs_size_t *nsize) {
+    // check if we need a new block
+    if (!(file->flags & LFS_F_WRITING) ||
+            file->off == lfs->cfg->block_size) {
+        if (!(file->flags & LFS_F_INLINE)) {
+            if (!(file->flags & LFS_F_WRITING) && file->pos > 0) {
+                // find out which block we're extending from
+                int err = lfs_ctz_find(lfs, NULL, &file->cache,
+                        file->ctz.head, file->ctz.size,
+                        file->pos-1, &file->block, &file->off);
+                if (err) {
+                    file->flags |= LFS_F_ERRED;
+                    return err;
+                }
+
+                // mark cache as dirty since we may have read data into it
+                lfs_cache_zero(lfs, &file->cache);
+            }
+
+            // extend file with new blocks
+            lfs_alloc_ack(lfs);
+            int err = lfs_ctz_extend(lfs, &file->cache, &lfs->rcache,
+                    file->block, file->pos,
+                    &file->block, &file->off);
+            if (err) {
+                file->flags |= LFS_F_ERRED;
+                return err;
+            }
+        } else {
+            file->block = LFS_BLOCK_INLINE;
+            file->off = file->pos;
+        }
+        file->flags |= LFS_F_WRITING;
+    }
+
+    //if (file->action_complete_cb == NULL) {
+        int err = flushedwrite_write_block(lfs, file, data, nsize);
+        return err;
+    //}
+    //return LFS_ERR_OK;
+}
+
 static lfs_ssize_t lfs_file_flushedwrite(lfs_t *lfs, lfs_file_t *file,
         const void *buffer, lfs_size_t size) {
     const uint8_t *data = buffer;
-    lfs_size_t nsize = size;
+    lfs_size_t tmp_size = size;
+    lfs_size_t *nsize = &tmp_size;
 
     if ((file->flags & LFS_F_INLINE) &&
-            lfs_max(file->pos+nsize, file->ctz.size) >
+            lfs_max(file->pos+*nsize, file->ctz.size) >
             lfs_min(0x3fe, lfs_min(
                 lfs->cfg->cache_size,
                 (lfs->cfg->metadata_max ?
@@ -3340,73 +3421,10 @@ static lfs_ssize_t lfs_file_flushedwrite(lfs_t *lfs, lfs_file_t *file,
             return err;
         }
     }
-
-    while (nsize > 0) {
-        // check if we need a new block
-        if (!(file->flags & LFS_F_WRITING) ||
-                file->off == lfs->cfg->block_size) {
-            if (!(file->flags & LFS_F_INLINE)) {
-                if (!(file->flags & LFS_F_WRITING) && file->pos > 0) {
-                    // find out which block we're extending from
-                    int err = lfs_ctz_find(lfs, NULL, &file->cache,
-                            file->ctz.head, file->ctz.size,
-                            file->pos-1, &file->block, &file->off);
-                    if (err) {
-                        file->flags |= LFS_F_ERRED;
-                        return err;
-                    }
-
-                    // mark cache as dirty since we may have read data into it
-                    lfs_cache_zero(lfs, &file->cache);
-                }
-
-                // extend file with new blocks
-                lfs_alloc_ack(lfs);
-                int err = lfs_ctz_extend(lfs, &file->cache, &lfs->rcache,
-                        file->block, file->pos,
-                        &file->block, &file->off);
-                if (err) {
-                    file->flags |= LFS_F_ERRED;
-                    return err;
-                }
-            } else {
-                file->block = LFS_BLOCK_INLINE;
-                file->off = file->pos;
-            }
-
-            file->flags |= LFS_F_WRITING;
-        }
-
-        // program as much as we can in current block
-        lfs_size_t diff = lfs_min(nsize, lfs->cfg->block_size - file->off);
-        while (true) {
-            int err = lfs_bd_prog(lfs, &file->cache, &lfs->rcache, true,
-                    file->block, file->off, data, diff);
-            if (err) {
-                if (err == LFS_ERR_CORRUPT) {
-                    goto relocate;
-                }
-                file->flags |= LFS_F_ERRED;
-                return err;
-            }
-
-            break;
-relocate:
-            err = lfs_file_relocate(lfs, file);
-            if (err) {
-                file->flags |= LFS_F_ERRED;
-                return err;
-            }
-        }
-
-        file->pos += diff;
-        file->off += diff;
-        data += diff;
-        nsize -= diff;
-
-        lfs_alloc_ack(lfs);
+    int err = flushedwrite_find_block(lfs, file, &data, nsize);
+    if (err) {
+        return err;
     }
-
     return size;
 }
 

@@ -263,6 +263,10 @@ struct lfs_config {
     // can help bound the metadata compaction time. Must be <= block_size.
     // Defaults to block_size when zero.
     lfs_size_t metadata_max;
+
+    union {
+        void (*erase_cb)(const struct lfs_config *c, int err_code);
+    } lfs_bd_callbacks_t;
 };
 
 // File info structure
@@ -367,6 +371,7 @@ typedef struct lfs_file {
     lfs_cache_t cache;
 
     const struct lfs_file_config *cfg;
+    void (*action_complete_cb)(struct lfs_file *file, int err_code);
 } lfs_file_t;
 
 typedef struct lfs_superblock {

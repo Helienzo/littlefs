@@ -3216,7 +3216,7 @@ static int file_flush_copy(lfs_t *lfs);
 static int file_flush_writeout(lfs_t *lfs);
 static int file_flush_relocate(lfs_t *lfs);
 static int file_flush_done(lfs_t *lfs, int retval);
-static lfs_ssize_t file_flush_register_callback(lfs_t *lfs, lfs_ssize_t (*cb)(struct lfs *lfs, lfs_ssize_t retval));
+static lfs_ssize_t file_flush_register_callback(lfs_t *lfs, lfs_ssize_t (*cb)(lfs_t *lfs, lfs_ssize_t retval));
 
 static lfs_ssize_t file_flush_register_callback(lfs_t *lfs, lfs_ssize_t (*cb)(struct lfs *lfs, lfs_ssize_t retval)) {
     if (cb != NULL) {
@@ -3298,7 +3298,6 @@ static int file_flush_done(lfs_t *lfs, int retval) {
 
         lfs->workspace.file->pos = lfs->workspace.file_flush.pos;
     }
-
     if (lfs->workspace.file_flush.file_flush_done_cb != NULL) {
         // Call caller if this was a non blocking call
         return lfs->workspace.file_flush.file_flush_done_cb(lfs, retval);
@@ -3344,61 +3343,108 @@ static int lfs_file_flush(lfs_t *lfs, lfs_file_t *file) {
     }
 #endif
 
-    return 0;
+    // Special case if the above if is never evaluated, just return 0
+    if (lfs->workspace.file_flush.file_flush_done_cb != NULL) {
+        // Call caller if this was a non blocking call
+        return lfs->workspace.file_flush.file_flush_done_cb(lfs, 0);
+    }
+    else {
+        return 0;
+    }
 }
 // ********************* FILE_FLUSH *********************
 
 #ifndef LFS_READONLY
 // ********************* RAWSYNC *********************
-static int lfs_file_rawsync(lfs_t *lfs, lfs_file_t *file) {
-    if (file->flags & LFS_F_ERRED) {
-        // it's not safe to do anything if our file errored
-        return 0;
+static lfs_ssize_t rawsync_file_flush_done_cb(lfs_t *lfs, lfs_ssize_t retval);
+static int rawsync_done(lfs_t *lfs, int retval);
+static lfs_ssize_t rawsync_register_callback(lfs_t *lfs, lfs_ssize_t (*cb)(lfs_t *lfs, lfs_ssize_t retval));
+
+static lfs_ssize_t rawsync_register_callback(lfs_t *lfs, lfs_ssize_t (*cb)(lfs_t *lfs, lfs_ssize_t retval)) {
+    if (cb != NULL) {
+        lfs->workspace.rawsync.rawsync_done_cb = cb;
+        return LFS_ERR_OK;
+    }
+    else {
+        lfs->workspace.rawsync.rawsync_done_cb = NULL;
+        return LFS_ERR_INVAL;
     }
 
-    int err = lfs_file_flush(lfs, file);
-    if (err) {
-        file->flags |= LFS_F_ERRED;
-        return err;
+}
+
+static lfs_ssize_t rawsync_file_flush_done_cb(lfs_t *lfs, lfs_ssize_t retval) {
+
+    // Restore file flush callback
+    file_flush_register_callback(lfs, NULL);
+
+    // Check if file_flush failed
+    if (retval) {
+        lfs->workspace.file->flags |= LFS_F_ERRED;
+        return rawsync_done(lfs ,retval);
     }
 
-
-    if ((file->flags & LFS_F_DIRTY) &&
-            !lfs_pair_isnull(file->m.pair)) {
+    if ((lfs->workspace.file->flags & LFS_F_DIRTY) &&
+            !lfs_pair_isnull(lfs->workspace.file->m.pair)) {
         // update dir entry
         uint16_t type;
         const void *buffer;
         lfs_size_t size;
         struct lfs_ctz ctz;
-        if (file->flags & LFS_F_INLINE) {
+        if (lfs->workspace.file->flags & LFS_F_INLINE) {
             // inline the whole file
             type = LFS_TYPE_INLINESTRUCT;
-            buffer = file->cache.buffer;
-            size = file->ctz.size;
+            buffer = lfs->workspace.file->cache.buffer;
+            size = lfs->workspace.file->ctz.size;
         } else {
             // update the ctz reference
             type = LFS_TYPE_CTZSTRUCT;
             // copy ctz so alloc will work during a relocate
-            ctz = file->ctz;
+            ctz = lfs->workspace.file->ctz;
             lfs_ctz_tole32(&ctz);
             buffer = &ctz;
             size = sizeof(ctz);
         }
 
         // commit file data and attributes
-        err = lfs_dir_commit(lfs, &file->m, LFS_MKATTRS(
-                {LFS_MKTAG(type, file->id, size), buffer},
-                {LFS_MKTAG(LFS_FROM_USERATTRS, file->id,
-                    file->cfg->attr_count), file->cfg->attrs}));
+        int err = lfs_dir_commit(lfs, &lfs->workspace.file->m, LFS_MKATTRS(
+                {LFS_MKTAG(type, lfs->workspace.file->id, size), buffer},
+                {LFS_MKTAG(LFS_FROM_USERATTRS, lfs->workspace.file->id,
+                    lfs->workspace.file->cfg->attr_count), lfs->workspace.file->cfg->attrs}));
         if (err) {
-            file->flags |= LFS_F_ERRED;
-            return err;
+            lfs->workspace.file->flags |= LFS_F_ERRED;
+            return rawsync_done(lfs, err);
         }
 
-        file->flags &= ~LFS_F_DIRTY;
+        lfs->workspace.file->flags &= ~LFS_F_DIRTY;
     }
 
-    return 0;
+    // Command successful
+    return rawsync_done(lfs, 0);
+}
+
+static int rawsync_done(lfs_t *lfs, int retval) {
+    if (lfs->workspace.rawsync.rawsync_done_cb != NULL) {
+        // Call caller if this was a non blocking call
+        return lfs->workspace.rawsync.rawsync_done_cb(lfs, retval);
+    }
+    else {
+        return retval;
+    }
+}
+
+static int lfs_file_rawsync(lfs_t *lfs, lfs_file_t *file) {
+    // TODO tmp, store ptr to the file and context
+    lfs->workspace.file = file;
+    lfs->workspace.lfs  = lfs;
+    // TODO above .. not needed
+
+    if (file->flags & LFS_F_ERRED) {
+        // it's not safe to do anything if our file errored
+        return rawsync_done(lfs ,0);
+    }
+
+    file_flush_register_callback(lfs, rawsync_file_flush_done_cb);
+    return lfs_file_flush(lfs, file);
 }
 // ********************* RAWSYNC *********************
 #endif
@@ -5596,6 +5642,7 @@ int lfs_format(lfs_t *lfs, const struct lfs_config *cfg) {
     flushedwrite_register_callback(lfs, NULL);
     lfs_register_command_done_callback(lfs, NULL);
     file_flush_register_callback(lfs, NULL);
+    rawsync_register_callback(lfs, NULL);
 
     err = lfs_rawformat(lfs, cfg);
 

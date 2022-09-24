@@ -429,6 +429,10 @@ struct lfs {
         // Common for all steps
         struct lfs *lfs;
         lfs_file_t *file;
+        // rawsync
+        struct lfs_rawsync{
+            lfs_ssize_t (*rawsync_done_cb)(struct lfs *lfs, lfs_ssize_t retval);
+        } rawsync;
         // file_flush
         struct lfs_file_flush {
             lfs_ssize_t (*file_flush_done_cb)(struct lfs *lfs, lfs_ssize_t retval);

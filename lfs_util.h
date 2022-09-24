@@ -50,6 +50,12 @@ extern "C"
 // code footprint
 
 // Logging functions
+#ifndef LFS_TRACE_SUPER
+#define LFS_TRACE_SUPER_(fmt, ...) \
+    printf("%s:%d:trace: " fmt "%s\n", __FILE__, __LINE__, __VA_ARGS__)
+#define LFS_TRACE_SUPER(...) LFS_TRACE_SUPER_(__VA_ARGS__, "")
+#endif
+
 #ifndef LFS_TRACE
 #ifdef LFS_YES_TRACE
 #define LFS_TRACE_(fmt, ...) \

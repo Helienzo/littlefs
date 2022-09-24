@@ -2813,6 +2813,8 @@ static int ctz_extend_nothing_to_write(lfs_t *lfs) {
 
 
 static int ctz_erase_cb(const struct lfs_config *c, int err_code) {
+    // Reset the callback
+    (*c->current_lfs)->lfs_bd_callbacks.erase_cb = NULL;
     if (err_code) {
         // Manage immediate errors
         if (err_code == LFS_ERR_CORRUPT) {
@@ -3535,6 +3537,26 @@ static lfs_ssize_t file_rawwrite_done(lfs_t *lfs, lfs_ssize_t retval) {
     return retval;
 }
 
+static lfs_ssize_t rawwrite_fill_with_zero(lfs_t *lfs, lfs_ssize_t retval) {
+    if (retval < 0) {
+        // Error
+        return file_rawwrite_done(lfs, retval);
+    }
+    // Check next state
+    if (lfs->workspace.rawwrite.pos < lfs->workspace.file->pos) {
+        // We are not done with this state yet
+        lfs->workspace.flushedwrite.flushedwrite_done_cb = rawwrite_fill_with_zero;
+        return lfs_file_flushedwrite(lfs, lfs->workspace.file, &(uint8_t){0}, 1);
+    }
+    else {
+        // Go to next state
+        lfs->workspace.flushedwrite.flushedwrite_done_cb = file_rawwrite_done;
+        return lfs_file_flushedwrite(lfs, lfs->workspace.file, lfs->workspace.rawwrite.buffer, lfs->workspace.rawwrite.size);
+    }
+
+}
+
+
 static lfs_ssize_t lfs_file_rawwrite(lfs_t *lfs, lfs_file_t *file,
         const void *buffer, lfs_size_t size) {
     // TODO has two async calls
@@ -3557,21 +3579,14 @@ static lfs_ssize_t lfs_file_rawwrite(lfs_t *lfs, lfs_file_t *file,
         return LFS_ERR_FBIG;
     }
 
-    // This needs to be put in a separate function
+    lfs->workspace.rawwrite.size = size;
+    lfs->workspace.rawwrite.buffer = buffer;
+
     if (!(file->flags & LFS_F_WRITING) && file->pos > file->ctz.size) {
         // fill with zeros
-        lfs_off_t pos = file->pos;
+        lfs->workspace.rawwrite.pos = file->ctz.size;
         file->pos = file->ctz.size;
-
-        while (file->pos < pos) {
-            // TODO async call
-            // TODO change the next state here
-            // TODO uncomment lfs->workspace.flushedwrite.flushedwrite_done_cb = file_rawwrite_done;
-            lfs_ssize_t res = lfs_file_flushedwrite(lfs, file, &(uint8_t){0}, 1);
-            if (res < 0) {
-                return res;
-            }
-        }
+        return rawwrite_fill_with_zero(lfs, LFS_ERR_OK);
     }
 
     // Set callback
@@ -5448,6 +5463,7 @@ int lfs_format(lfs_t *lfs, const struct lfs_config *cfg) {
             cfg->read_buffer, cfg->prog_buffer, cfg->lookahead_buffer,
             cfg->name_max, cfg->file_max, cfg->attr_max);
 
+    lfs->lfs_bd_callbacks.erase_cb = NULL;
     err = lfs_rawformat(lfs, cfg);
 
     LFS_TRACE("lfs_format -> %d", err);

@@ -429,8 +429,11 @@ struct lfs {
         // Common for all steps
         struct lfs *lfs;
         lfs_file_t *file;
-        struct lfs_rawwrite{
+        struct lfs_rawwrite {
             lfs_ssize_t (*rawwrite_done_cb)(struct lfs *lfs, lfs_ssize_t retval);
+            lfs_size_t size;
+            const uint8_t *buffer;
+            lfs_off_t pos;
         } rawwrite;
         // Flushedwrite
         struct lfs_flushedwrite {

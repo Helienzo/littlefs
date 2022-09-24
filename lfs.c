@@ -2735,6 +2735,8 @@ static int ctz_extend_append(lfs_t *lfs) {
                     relocate = 1;
                     break;
                 }
+                // TODO propagate error
+                // perhaps return ctz_extend_error(lfs);
                 return err;
             }
 
@@ -2744,6 +2746,8 @@ static int ctz_extend_append(lfs_t *lfs) {
                         nhead, 4*i, &nhead, sizeof(nhead));
                 nhead = lfs_fromle32(nhead);
                 if (err) {
+                    // TODO propagate error
+                    // perhaps return ctz_extend_error(lfs);
                     return err;
                 }
             }
@@ -2779,6 +2783,8 @@ static int ctz_extend_copy_out(lfs_t *lfs) {
                         NULL, lfs->workspace.rcache, noff-i,
                         lfs->workspace.head, i, &data, 1);
                 if (err) {
+                    // TODO propagate error
+                    // perhaps return ctz_extend_error(lfs);
                     return err;
                 }
 
@@ -2791,6 +2797,8 @@ static int ctz_extend_copy_out(lfs_t *lfs) {
                         lfs->ctz_extend_next = ctz_extend_relocate;
                         break;
                     }
+                    // TODO propagate error
+                    // perhaps return ctz_extend_error(lfs);
                     return err;
                 }
             }
@@ -2823,6 +2831,7 @@ static int ctz_extend_nothing_to_write(lfs_t *lfs) {
 
 static int ctz_erase_cb(const struct lfs_config *c, int err_code) {
     // TODO propagte error
+    // perhaps return ctz_extend_error(lfs);
     UNUSED(err_code);
     return (*c->current_lfs)->ctz_extend_next(*c->current_lfs);
 }

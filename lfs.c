@@ -13,7 +13,7 @@
 #define LFS_BLOCK_NULL ((lfs_block_t)-1)
 #define LFS_BLOCK_INLINE ((lfs_block_t)-2)
 #define UNUSED(x) (void)(x)
-
+//#define FAKE_NON_BLOCKING
 enum {
     LFS_OK_RELOCATED = 1,
     LFS_OK_DROPPED   = 2,
@@ -2708,7 +2708,7 @@ static int ctz_extend_done(lfs_t *lfs,
 
     // TODO get the correct context here, just a dummy
     lfs_file_t *file      = lfs->lsf_cb_context[0].file;
-    const uint8_t **data  = lfs->lsf_cb_context[0].data;
+    const uint8_t *data  = lfs->lsf_cb_context[0].data_ptr;
     lfs_size_t *nsize_ptr = &lfs->lsf_cb_context[0].nsize;
 
     if (lfs->lsf_cb_context[1].file->action_complete_cb == NULL) {
@@ -2717,7 +2717,7 @@ static int ctz_extend_done(lfs_t *lfs,
     }
     else {
         // Continue from a non blocking call
-        int err = lfs->flushedwrite_next(lfs, file, data, nsize_ptr);
+        int err = lfs->flushedwrite_next(lfs, file, &data, nsize_ptr);
         return err;
     }
 }
@@ -2865,14 +2865,14 @@ static int ctz_extend_block_erase(lfs_t *lfs,
         // erase block
         int err = lfs_bd_erase(lfs, *nblock);
 
-        // corrupt block block goto relocate (can only happen in blocking mode)
         if (err) {
+            // Manage immediate errors
             if (err == LFS_ERR_CORRUPT) {
-                // Set next action function
+                // If the block is corrupt replace it
                 lfs->ctz_extend_next = ctz_extend_relocate;
             }
             else {
-                // TODO If it not a corrupt error we must propagete error
+                // If it is not corrupt but sill fails return
                 return err;
             }
         }
@@ -2882,8 +2882,12 @@ static int ctz_extend_block_erase(lfs_t *lfs,
             return lfs->ctz_extend_next(lfs, pcache, rcache, head, size, block, off, nblock);
         }
         else {
+#if defined(FAKE_NON_BLOCKING)
+            return lfs->ctz_extend_next(lfs, pcache, rcache, head, size, block, off, nblock);
+#else
             // If this is a non blocking call we just return
             return LFS_ERR_OK;
+#endif
         }
 }
 
@@ -3524,39 +3528,37 @@ static lfs_ssize_t flushedwrite_find_block(lfs_t *lfs, lfs_file_t *file, const u
                     file->block, file->pos,
                     &file->block, &file->off);
             if (err) {
+                // If we encounter immediate errors, reset flag end exit
                 file->flags &= ~LFS_F_WRITING;
                 file->flags |= LFS_F_ERRED;
                 return err;
             }
+            if (file->action_complete_cb != NULL) {
+                // Non blocking calls will return here
+                return LFS_ERR_OK;
+            }
         } else {
             file->block = LFS_BLOCK_INLINE;
             file->off = file->pos;
-            file->flags |= LFS_F_WRITING;
         }
+        file->flags |= LFS_F_WRITING;
     }
-
-    if (file->action_complete_cb == NULL) {
-        // Do a blocking call
-        int err = lfs->flushedwrite_next(lfs, file, data, nsize);
-        return err;
-    }
-    else {
-        // Do a non blocking call
-        return LFS_ERR_OK;
-    }
+    // Always do blocking call if we get here
+    return lfs->flushedwrite_next(lfs, file, data, nsize);
 }
 
 static lfs_ssize_t lfs_file_flushedwrite(lfs_t *lfs, lfs_file_t *file,
         const void *buffer, lfs_size_t size) {
-    const uint8_t *data = buffer;
     lfs_size_t nsize = size;
 
     // TODO take the correct context here, just a dummy
     lfs->lsf_cb_context[0].lfs   = lfs;
     lfs->lsf_cb_context[0].file  = file;
-    lfs->lsf_cb_context[0].data  = &data;
+    lfs->lsf_cb_context[0].data_ptr = buffer;
     lfs->lsf_cb_context[0].nsize = nsize;
     lfs_size_t *nsize_ptr = &lfs->lsf_cb_context[0].nsize;
+
+    const uint8_t *data = lfs->lsf_cb_context[0].data_ptr;
 
     if ((file->flags & LFS_F_INLINE) &&
             lfs_max(file->pos+nsize, file->ctz.size) >
@@ -5638,6 +5640,14 @@ int lfs_removeattr(lfs_t *lfs, const char *path, uint8_t type) {
 #endif
 
 #ifndef LFS_NO_MALLOC
+// TODO dummy fake cb funciton
+#if defined(FAKE_NON_BLOCKING)
+static void action_complete_cb(lfs_file_t *file, int err_code) {
+    UNUSED(file);
+    UNUSED(err_code);
+}
+#endif
+
 int lfs_file_open(lfs_t *lfs, lfs_file_t *file, const char *path, int flags) {
     int err = LFS_LOCK(lfs->cfg);
     if (err) {
@@ -5648,7 +5658,11 @@ int lfs_file_open(lfs_t *lfs, lfs_file_t *file, const char *path, int flags) {
     LFS_ASSERT(!lfs_mlist_isopen(lfs->mlist, (struct lfs_mlist*)file));
 
     // Temp init the action_complete_cb to NULL;
+#if defined(FAKE_NON_BLOCKING)
+    file->action_complete_cb = action_complete_cb;
+#else
     file->action_complete_cb = NULL;
+#endif
     err = lfs_file_rawopen(lfs, file, path, flags);
 
     LFS_TRACE("lfs_file_open -> %d", err);

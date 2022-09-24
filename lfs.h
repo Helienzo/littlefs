@@ -430,7 +430,7 @@ typedef struct lfs {
     struct lsf_cb_context {
         struct lfs *lfs;
         lfs_file_t *file;
-        const uint8_t **data;
+        const uint8_t *data_ptr;
         lfs_size_t nsize;
         lfs_cache_t *pcache;
         lfs_cache_t *rcache;

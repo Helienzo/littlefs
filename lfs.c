@@ -13,7 +13,7 @@
 #define LFS_BLOCK_NULL ((lfs_block_t)-1)
 #define LFS_BLOCK_INLINE ((lfs_block_t)-2)
 #define UNUSED(x) (void)(x)
-#define FAKE_NON_BLOCKING
+//#define SET_CB
 enum {
     LFS_OK_RELOCATED = 1,
     LFS_OK_DROPPED   = 2,
@@ -28,7 +28,7 @@ enum {
 
 
 /// Caching block device operations ///
-
+int lfs_register_command_done_callback(lfs_t *lfs, lfs_ssize_t (*cb)(lfs_t *lfs, lfs_ssize_t err_code));
 static inline void lfs_cache_drop(lfs_t *lfs, lfs_cache_t *rcache) {
     // do not zero, cheaper if cache is readonly or only going to be
     // written with identical data (during relocates)
@@ -254,21 +254,8 @@ static int lfs_bd_prog(lfs_t *lfs,
 #ifndef LFS_READONLY
 static int lfs_bd_erase(lfs_t *lfs, lfs_block_t block) {
     LFS_ASSERT(block < lfs->cfg->block_count);
-    int err = lfs->cfg->erase(lfs->cfg, block);
-    LFS_ASSERT(err <= 0);
-
-#if defined(FAKE_NON_BLOCKING)
-    if (lfs->lfs_bd_callbacks.erase_cb != NULL) {
-        return lfs->lfs_bd_callbacks.erase_cb(lfs->cfg, err);
-    }
-    else {
-        // If this is a non blocking call we just return
-        return err;
-    }
-#else
-    // If this is a non blocking call we just return
-    return err;
-#endif
+    *(lfs->cfg->current_lfs) = lfs;
+    return lfs->cfg->erase(lfs->cfg, block);
 }
 #endif
 
@@ -2850,12 +2837,17 @@ static int ctz_extend_block_erase(lfs_t *lfs) {
     *(lfs->cfg->current_lfs) = lfs->workspace.lfs;
 
     // erase block
-    lfs->lfs_bd_callbacks.erase_cb = ctz_erase_cb;
     if (lfs->action_complete_cb == NULL) {
+        // Make sure to clear callback
+        lfs->lfs_bd_callbacks.erase_cb = NULL;
+        // Call Erase
         int err = lfs_bd_erase(lfs, lfs->workspace.ctx_extend.nblock);
         // Call next state
-        return lfs->lfs_bd_callbacks.erase_cb(lfs->cfg, err);
+        return ctz_erase_cb(lfs->cfg, err);
     } else {
+        // Set callback
+        lfs->lfs_bd_callbacks.erase_cb = ctz_erase_cb;
+        // Call Erase
         return lfs_bd_erase(lfs, lfs->workspace.ctx_extend.nblock);
     }
 }
@@ -3587,7 +3579,12 @@ static lfs_ssize_t file_rawwrite_done(lfs_t *lfs, lfs_ssize_t retval) {
     }
 
     if (lfs->workspace.rawwrite.rawwrite_done_cb != NULL) {
-        return lfs->workspace.rawwrite.rawwrite_done_cb(lfs, retval);
+
+        lfs->workspace.rawwrite.rawwrite_done_cb(lfs, retval);
+
+        // Reset callback
+        lfs_register_command_done_callback(lfs, NULL);
+        return retval;
     }
     else {
         return retval;
@@ -5527,6 +5524,7 @@ int lfs_format(lfs_t *lfs, const struct lfs_config *cfg) {
     lfs->lfs_bd_callbacks.erase_cb = NULL;
     ctz_extend_register_callback(lfs, NULL);
     flushedwrite_register_callback(lfs, NULL);
+    lfs_register_command_done_callback(lfs, NULL);
 
     err = lfs_rawformat(lfs, cfg);
 
@@ -5677,7 +5675,7 @@ int lfs_removeattr(lfs_t *lfs, const char *path, uint8_t type) {
 
 #ifndef LFS_NO_MALLOC
 // TODO dummy fake cb funciton
-#if defined(FAKE_NON_BLOCKING)
+#if defined(SET_CB)
 static lfs_ssize_t action_complete_cb(lfs_t *lfs, lfs_ssize_t err_code) {
     UNUSED(lfs);
     return err_code;
@@ -5706,7 +5704,7 @@ int lfs_file_open(lfs_t *lfs, lfs_file_t *file, const char *path, int flags) {
     LFS_ASSERT(!lfs_mlist_isopen(lfs->mlist, (struct lfs_mlist*)file));
 
     // Temp init the action_complete_cb to NULL;
-#if defined(FAKE_NON_BLOCKING)
+#if defined(SET_CB)
     lfs_register_command_done_callback(lfs, action_complete_cb);
 #else
     lfs_register_command_done_callback(lfs, NULL);

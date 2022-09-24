@@ -231,11 +231,18 @@ int lfs_testbd_erase(const struct lfs_config *cfg, lfs_block_t block) {
             if (bd->cfg->badblock_behavior ==
                     LFS_TESTBD_BADBLOCK_ERASEERROR) {
                 LFS_TESTBD_TRACE("lfs_testbd_erase -> %d", LFS_ERR_CORRUPT);
+                if ((*cfg->current_lfs)->lfs_bd_callbacks.erase_cb != NULL) {
+                    return (*cfg->current_lfs)->lfs_bd_callbacks.erase_cb(cfg, LFS_ERR_CORRUPT);
+                }
                 return LFS_ERR_CORRUPT;
             } else if (bd->cfg->badblock_behavior ==
                     LFS_TESTBD_BADBLOCK_ERASENOOP) {
                 LFS_TESTBD_TRACE("lfs_testbd_erase -> %d", 0);
+                if ((*cfg->current_lfs)->lfs_bd_callbacks.erase_cb != NULL) {
+                    return (*cfg->current_lfs)->lfs_bd_callbacks.erase_cb(cfg, 0);
+                }
                 return 0;
+
             }
         } else {
             // mark wear
@@ -247,6 +254,9 @@ int lfs_testbd_erase(const struct lfs_config *cfg, lfs_block_t block) {
     int err = lfs_testbd_rawerase(cfg, block);
     if (err) {
         LFS_TESTBD_TRACE("lfs_testbd_erase -> %d", err);
+        if ((*cfg->current_lfs)->lfs_bd_callbacks.erase_cb != NULL) {
+            return (*cfg->current_lfs)->lfs_bd_callbacks.erase_cb(cfg, err);
+        }
         return err;
     }
 
@@ -259,6 +269,10 @@ int lfs_testbd_erase(const struct lfs_config *cfg, lfs_block_t block) {
             // simulate power loss
             exit(33);
         }
+    }
+
+    if ((*cfg->current_lfs)->lfs_bd_callbacks.erase_cb != NULL) {
+        return (*cfg->current_lfs)->lfs_bd_callbacks.erase_cb(cfg, 0);
     }
 
     LFS_TESTBD_TRACE("lfs_testbd_prog -> %d", 0);

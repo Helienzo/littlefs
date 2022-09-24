@@ -33,8 +33,6 @@ extern "C"
 #define LFS_DISK_VERSION 0x00020000
 #define LFS_DISK_VERSION_MAJOR (0xffff & (LFS_DISK_VERSION >> 16))
 #define LFS_DISK_VERSION_MINOR (0xffff & (LFS_DISK_VERSION >>  0))
-#define CB_STACK_SIZE 10
-
 
 /// Definitions ///
 
@@ -264,10 +262,6 @@ struct lfs_config {
     // can help bound the metadata compaction time. Must be <= block_size.
     // Defaults to block_size when zero.
     lfs_size_t metadata_max;
-
-    union {
-        void (*erase_cb)(const struct lfs_config *c, int err_code);
-    } lfs_bd_callbacks_t;
 };
 
 // File info structure
@@ -424,14 +418,21 @@ typedef struct lfs {
     struct lfs1 *lfs1;
 #endif
 
-    lfs_ssize_t (*flushedwrite_next)(struct lfs *lfs, lfs_file_t *file, const uint8_t **data, lfs_size_t *nsize);
-    int (*ctz_extend_next)(struct lfs *lfs, lfs_cache_t *pcache, lfs_cache_t *rcache, lfs_block_t head, lfs_size_t size, lfs_block_t *block, lfs_off_t *off,  lfs_block_t *nblock);
+    union {
+        void (*erase_cb)(struct lfs *lfs, const struct lfs_config *c, int err_code);
+    } lfs_bd_callbacks;
 
-    struct lsf_cb_context {
+    lfs_ssize_t (*flushedwrite_next)(struct lfs *lfs);
+    int (*ctz_extend_next)(struct lfs *lfs);
+
+    struct lsf_workspace {
+        // Common for all steps
         struct lfs *lfs;
+        // Flushedwrite
         lfs_file_t *file;
         const uint8_t *data_ptr;
         lfs_size_t nsize;
+        // ctz_extend
         lfs_cache_t *pcache;
         lfs_cache_t *rcache;
         lfs_block_t head;
@@ -439,9 +440,8 @@ typedef struct lfs {
         lfs_block_t *block;
         lfs_off_t *off;
         lfs_block_t nblock;
-   } lsf_cb_context[CB_STACK_SIZE];
+   } workspace;
 } lfs_t;
-
 
 /// Filesystem functions ///
 

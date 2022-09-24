@@ -2701,13 +2701,27 @@ static int lfs_ctz_find(lfs_t *lfs,
 }
 
 #ifndef LFS_READONLY
+// ********************* CTZ EXTEND *********************
 static int ctz_extend_alloc(lfs_t *lfs);
 
-static int ctz_extend_done(lfs_t *lfs, int retval) {
+static int ctz_extend_register_callback(lfs_t *lfs, lfs_ssize_t (*cb)(struct lfs *lfs, lfs_ssize_t retval)) {
+    if (cb != NULL) {
+        lfs->workspace.ctx_extend.ctz_extend_done_cb = cb;
+        return LFS_ERR_OK;
+    } else {
+        lfs->workspace.ctx_extend.ctz_extend_done_cb = NULL;
+        return LFS_ERR_INVAL;
+    }
+}
 
+static int ctz_extend_done(lfs_t *lfs, int retval) {
     // Call done cb
-    // TODO do we need to check what we return LFS_ERR_OK
-    return lfs->workspace.ctx_extend.ctz_extend_done_cb(lfs, retval);
+    if (lfs->workspace.ctx_extend.ctz_extend_done_cb) {
+        return lfs->workspace.ctx_extend.ctz_extend_done_cb(lfs, retval);
+    }
+    else {
+        return retval;
+    }
 }
 
 static int ctz_extend_relocate(lfs_t *lfs) {
@@ -2873,6 +2887,7 @@ static int lfs_ctz_extend(lfs_t *lfs,
     // alloc block
     return ctz_extend_alloc(lfs);
 }
+// ********************* CTZ EXTEND *********************
 #endif
 
 static int lfs_ctz_traverse(lfs_t *lfs,
@@ -3482,7 +3497,7 @@ static lfs_ssize_t flushedwrite_find_block(lfs_t *lfs) {
 
             // extend file with new blocks
             lfs_alloc_ack(lfs);
-            lfs->workspace.ctx_extend.ctz_extend_done_cb = flushedwrite_ctx_extend_done;
+            ctz_extend_register_callback(lfs, flushedwrite_ctx_extend_done);
             return lfs_ctz_extend(lfs, &lfs->workspace.file->cache, &lfs->rcache,
                     lfs->workspace.file->block, lfs->workspace.file->pos,
                     &lfs->workspace.file->block, &lfs->workspace.file->off);

@@ -425,24 +425,35 @@ struct lfs {
         int (*erase_cb)(const struct lfs_config *c, int err_code);
     } lfs_bd_callbacks;
 
-    lfs_ssize_t (*flushedwrite_next)(struct lfs *lfs);
-    int (*ctz_extend_next)(struct lfs *lfs);
-
     struct lsf_workspace {
         // Common for all steps
         struct lfs *lfs;
-        // Flushedwrite
         lfs_file_t *file;
-        const uint8_t *data_ptr;
-        lfs_size_t nsize;
+        struct lfs_rawwrite{
+            lfs_ssize_t (*rawwrite_done_cb)(struct lfs *lfs, lfs_ssize_t retval);
+        } rawwrite;
+        // Flushedwrite
+        struct lfs_flushedwrite {
+            lfs_ssize_t (*flushedwrite_done_cb)(struct lfs *lfs, lfs_ssize_t retval);
+            const uint8_t *data_ptr;
+            lfs_size_t nsize;
+            lfs_size_t size;
+        } flushedwrite;
         // ctz_extend
-        lfs_cache_t *pcache;
-        lfs_cache_t *rcache;
-        lfs_block_t head;
-        lfs_size_t size;
-        lfs_block_t *block;
-        lfs_off_t *off;
-        lfs_block_t nblock;
+        struct lfs_ctx_extend {
+            lfs_ssize_t (*ctz_extend_done_cb)(struct lfs *lfs, lfs_ssize_t retval);
+            lfs_cache_t *pcache;
+            lfs_cache_t *rcache;
+            lfs_block_t head;
+            lfs_size_t size;
+            lfs_block_t *block;
+            lfs_off_t *off;
+            lfs_block_t nblock;
+        } ctx_extend;
+        struct lfs_bd_erase{
+            // TODO just a place holder
+            lfs_size_t size;
+        } bd_erase;
    } workspace;
 };
 

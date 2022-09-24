@@ -2708,16 +2708,21 @@ static int ctz_extend_done(lfs_t *lfs,
         lfs_cache_t *pcache, lfs_cache_t *rcache,
         lfs_block_t head, lfs_size_t size,
         lfs_block_t *block, lfs_off_t *off,  lfs_block_t *nblock) {
-    if (file->action_complete_cb == NULL) {
-        // Do a blocking call
-        int err = lfs->flushedwrite_next(lfs, file, data, nsize);
-        return err;
-    }
-    else {
-        // Do a non blocking call
+
+    // TODO get the correct context here, just a dummy
+    lfs_file_t *file = lfs->lsf_cb_context[0]->file;
+    const uint8_t **data = lfs->lsf_cb_context[0]->data;
+    lfs_size_t *nsize_ptr = &lfs->lsf_cb_context[0]->nsize;
+
+    if (lfs->lsf_cb_context[0]->file.action_complete_cb == NULL) {
+        // This is the last step, return if blocking
         return LFS_ERR_OK;
     }
-
+    else {
+        // Continue from a non blocking call
+        int err = lfs->flushedwrite_next(lfs, file, data, nsize_ptr);
+        return err;
+    }
 }
 static int ctz_extend_nothing_to_write(lfs_t *lfs,
         lfs_cache_t *pcache, lfs_cache_t *rcache,

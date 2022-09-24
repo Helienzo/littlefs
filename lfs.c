@@ -2794,6 +2794,8 @@ static int ctz_extend_copy_out(lfs_t *lfs,
         lfs->ctz_extend_next = ctz_extend_append;
 
         lfs_size_t noff = size - 1;
+        lfs_off_t index = lfs_ctz_index(lfs, &noff);
+        UNUSED(index);
         noff = noff + 1;
         
         // just copy out the last block if it is incomplete
@@ -2875,12 +2877,13 @@ static int ctz_extend_block_erase(lfs_t *lfs,
             }
         }
 
-        // If this is a non blocking call we just return
         if (file->action_complete_cb == NULL) {
-            return LFS_ERR_OK;
+            // Do a blocking call
+            return lfs->ctz_extend_next(lfs, pcache, rcache, head, size, block, off, nblock);
         }
         else {
-            return lfs->ctz_extend_next(lfs, pcache, rcache, head, size, block, off, nblock);
+            // If this is a non blocking call we just return
+            return LFS_ERR_OK;
         }
 }
 

@@ -3395,11 +3395,15 @@ static lfs_ssize_t flushedwrite_find_block(lfs_t *lfs, lfs_file_t *file, const u
         file->flags |= LFS_F_WRITING;
     }
 
-    //if (file->action_complete_cb == NULL) {
+    if (file->action_complete_cb == NULL) {
+        // Do a blocking call
         int err = flushedwrite_write_block(lfs, file, data, nsize);
         return err;
-    //}
-    //return LFS_ERR_OK;
+    }
+    else {
+        // Do a non blocking call
+        return LFS_ERR_OK;
+    }
 }
 
 static lfs_ssize_t lfs_file_flushedwrite(lfs_t *lfs, lfs_file_t *file,
@@ -5497,6 +5501,8 @@ int lfs_file_open(lfs_t *lfs, lfs_file_t *file, const char *path, int flags) {
             (void*)lfs, (void*)file, path, flags);
     LFS_ASSERT(!lfs_mlist_isopen(lfs->mlist, (struct lfs_mlist*)file));
 
+    // Temp init the action_complete_cb to NULL;
+    file->action_complete_cb = NULL;
     err = lfs_file_rawopen(lfs, file, path, flags);
 
     LFS_TRACE("lfs_file_open -> %d", err);

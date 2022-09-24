@@ -2851,7 +2851,7 @@ static int ctz_extend_block_erase(lfs_t *lfs) {
 
     // erase block
     lfs->lfs_bd_callbacks.erase_cb = ctz_erase_cb;
-    if (lfs->workspace.file->action_complete_cb == NULL) {
+    if (lfs->action_complete_cb == NULL) {
         int err = lfs_bd_erase(lfs, lfs->workspace.ctx_extend.nblock);
         // Call next state
         return lfs->lfs_bd_callbacks.erase_cb(lfs->cfg, err);
@@ -3563,8 +3563,19 @@ static lfs_ssize_t flushedwrite_register_callback(lfs_t *lfs, lfs_ssize_t (*cb)(
         return LFS_ERR_INVAL;
     }
 }
-
 // ********************* FLUSHEDWRITE *********************
+
+// ********************* RAWWRITE *********************
+static lfs_ssize_t rawwrite_register_callback(lfs_t *lfs, lfs_ssize_t (*cb)(struct lfs *lfs, lfs_ssize_t retval)) {
+    if (cb != NULL) {
+        lfs->workspace.rawwrite.rawwrite_done_cb = cb;
+        return LFS_ERR_OK;
+    } else {
+        lfs->workspace.rawwrite.rawwrite_done_cb = NULL;
+        return LFS_ERR_INVAL;
+    }
+}
+
 static lfs_ssize_t file_rawwrite_done(lfs_t *lfs, lfs_ssize_t retval) {
 
     // Reset the callback
@@ -3575,7 +3586,12 @@ static lfs_ssize_t file_rawwrite_done(lfs_t *lfs, lfs_ssize_t retval) {
         lfs->workspace.file->flags &= ~LFS_F_ERRED;
     }
 
-    return retval;
+    if (lfs->workspace.rawwrite.rawwrite_done_cb != NULL) {
+        return lfs->workspace.rawwrite.rawwrite_done_cb(lfs, retval);
+    }
+    else {
+        return retval;
+    }
 }
 
 static lfs_ssize_t rawwrite_fill_with_zero(lfs_t *lfs, lfs_ssize_t retval) {
@@ -3740,6 +3756,8 @@ static int lfs_file_rawtruncate(lfs_t *lfs, lfs_file_t *file, lfs_off_t size) {
 
         // fill with zeros
         while (file->pos < size) {
+            // TODO Make a blocking raw write
+            rawwrite_register_callback(lfs, NULL);
             res = lfs_file_rawwrite(lfs, file, &(uint8_t){0}, 1);
             if (res < 0) {
                 return (int)res;
@@ -5660,11 +5678,23 @@ int lfs_removeattr(lfs_t *lfs, const char *path, uint8_t type) {
 #ifndef LFS_NO_MALLOC
 // TODO dummy fake cb funciton
 #if defined(FAKE_NON_BLOCKING)
-static void action_complete_cb(lfs_file_t *file, int err_code) {
-    UNUSED(file);
-    UNUSED(err_code);
+static lfs_ssize_t action_complete_cb(lfs_t *lfs, lfs_ssize_t err_code) {
+    UNUSED(lfs);
+    return err_code;
 }
 #endif
+
+int lfs_register_command_done_callback(lfs_t *lfs, lfs_ssize_t (*cb)(lfs_t *lfs, lfs_ssize_t err_code)) {
+
+    if (cb != NULL) {
+        lfs->action_complete_cb = cb;
+        return LFS_ERR_OK;
+    }
+    else {
+        lfs->action_complete_cb = NULL;
+        return LFS_ERR_INVAL;
+    }
+}
 
 int lfs_file_open(lfs_t *lfs, lfs_file_t *file, const char *path, int flags) {
     int err = LFS_LOCK(lfs->cfg);
@@ -5677,9 +5707,9 @@ int lfs_file_open(lfs_t *lfs, lfs_file_t *file, const char *path, int flags) {
 
     // Temp init the action_complete_cb to NULL;
 #if defined(FAKE_NON_BLOCKING)
-    file->action_complete_cb = action_complete_cb;
+    lfs_register_command_done_callback(lfs, action_complete_cb);
 #else
-    file->action_complete_cb = NULL;
+    lfs_register_command_done_callback(lfs, NULL);
 #endif
     err = lfs_file_rawopen(lfs, file, path, flags);
 
@@ -5769,6 +5799,11 @@ lfs_ssize_t lfs_file_write(lfs_t *lfs, lfs_file_t *file,
             (void*)lfs, (void*)file, buffer, size);
     LFS_ASSERT(lfs_mlist_isopen(lfs->mlist, (struct lfs_mlist*)file));
 
+    if (lfs->action_complete_cb != NULL) {
+        rawwrite_register_callback(lfs, lfs->action_complete_cb);
+    } else {
+        rawwrite_register_callback(lfs, NULL);
+    }
     lfs_ssize_t res = lfs_file_rawwrite(lfs, file, buffer, size);
 
     LFS_TRACE("lfs_file_write -> %"PRId32, res);

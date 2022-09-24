@@ -369,7 +369,6 @@ typedef struct lfs_file {
     lfs_cache_t cache;
 
     const struct lfs_file_config *cfg;
-    void (*action_complete_cb)(struct lfs_file *file, int err_code);
 } lfs_file_t;
 
 typedef struct lfs_superblock {
@@ -421,6 +420,7 @@ struct lfs {
     struct lfs1 *lfs1;
 #endif
 
+    lfs_ssize_t (*action_complete_cb)(struct lfs *lfs, lfs_ssize_t err_code);
     union {
         int (*erase_cb)(const struct lfs_config *c, int err_code);
     } lfs_bd_callbacks;

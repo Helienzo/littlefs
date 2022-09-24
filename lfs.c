@@ -12,6 +12,7 @@
 // some constants used throughout the code
 #define LFS_BLOCK_NULL ((lfs_block_t)-1)
 #define LFS_BLOCK_INLINE ((lfs_block_t)-2)
+#define UNUSED(x) (void)(x)
 
 enum {
     LFS_OK_RELOCATED = 1,
@@ -2691,30 +2692,26 @@ static int lfs_ctz_find(lfs_t *lfs,
 static int ctz_extend_alloc(lfs_t *lfs,
         lfs_cache_t *pcache, lfs_cache_t *rcache,
         lfs_block_t head, lfs_size_t size,
-        lfs_block_t *block, lfs_off_t *off, lfs_block_t *nblock) {
-
-        // go ahead and grab a block
-        int err = lfs_alloc(lfs, nblock);
-        if (err) {
-            return err;
-        }
-
-        // call erase
-        return ctz_extend_block_erase(lfs, pcache, rcache, head, size, block, off, nblock);
-}
-
+        lfs_block_t *block, lfs_off_t *off, lfs_block_t *nblock);
 
 static int ctz_extend_done(lfs_t *lfs,
         lfs_cache_t *pcache, lfs_cache_t *rcache,
         lfs_block_t head, lfs_size_t size,
         lfs_block_t *block, lfs_off_t *off,  lfs_block_t *nblock) {
+    UNUSED(pcache);
+    UNUSED(rcache);
+    UNUSED(head);
+    UNUSED(size);
+    UNUSED(block);
+    UNUSED(off);
+    UNUSED(nblock);
 
     // TODO get the correct context here, just a dummy
-    lfs_file_t *file = lfs->lsf_cb_context[0]->file;
-    const uint8_t **data = lfs->lsf_cb_context[0]->data;
-    lfs_size_t *nsize_ptr = &lfs->lsf_cb_context[0]->nsize;
+    lfs_file_t *file      = lfs->lsf_cb_context[0].file;
+    const uint8_t **data  = lfs->lsf_cb_context[0].data;
+    lfs_size_t *nsize_ptr = &lfs->lsf_cb_context[0].nsize;
 
-    if (lfs->lsf_cb_context[0]->file.action_complete_cb == NULL) {
+    if (lfs->lsf_cb_context[1].file->action_complete_cb == NULL) {
         // This is the last step, return if blocking
         return LFS_ERR_OK;
     }
@@ -2724,63 +2721,25 @@ static int ctz_extend_done(lfs_t *lfs,
         return err;
     }
 }
-static int ctz_extend_nothing_to_write(lfs_t *lfs,
-        lfs_cache_t *pcache, lfs_cache_t *rcache,
-        lfs_block_t head, lfs_size_t size,
-        lfs_block_t *block, lfs_off_t *off,  lfs_block_t *nblock) {
-    // Next is copy_out
-    lfs->ctz_extend_next = ctz_extend_copy_out;
-
-    if (size == 0) {
-        *block = nblock;
-        *off = 0;
-        // If nothing to write we are done
-        lfs->ctz_extend_next = ctz_extend_done;
-    }
-
-    return lfs->ctz_extend_next(lfs, pcache, rcache, head, size, block, off, nblock);
-}
 
 static int ctz_extend_relocate(lfs_t *lfs,
         lfs_cache_t *pcache, lfs_cache_t *rcache,
         lfs_block_t head, lfs_size_t size,
         lfs_block_t *block, lfs_off_t *off,  lfs_block_t *nblock) {
 
-        LFS_DEBUG("Bad block at 0x%"PRIx32, nblock);
+        LFS_DEBUG("Bad block at 0x%"PRIx32, *nblock);
         // just clear cache and try a new block
         lfs_cache_drop(lfs, pcache);
         return ctz_extend_alloc(lfs, pcache, rcache, head, size, block, off, nblock);
-}
-
-static int ctz_extend_block_erase(lfs_t *lfs,
-        lfs_cache_t *pcache, lfs_cache_t *rcache,
-        lfs_block_t head, lfs_size_t size,
-        lfs_block_t *block, lfs_off_t *off,  lfs_block_t *nblock) {
-
-        // Prepare the next call
-        lfs->ctz_extend_next = ctz_extend_nothing_to_write;
-
-        // erase block
-        int err = lfs_bd_erase(lfs, nblock);
-
-        // corrupt block block goto relocate (can only happen in blocking mode)
-        if (err) {
-            if (err == LFS_ERR_CORRUPT) {
-                // Set next action function
-                lfs->ctz_extend_next = ctz_extend_relocate;
-            }
-            else {
-                // TODO If it not a corrupt error we must propagete error
-                return err;
-            }
-        }
-        return lfs->ctz_extend_next(lfs, pcache, rcache, head, size, block, off, nblock);
 }
 
 static int ctz_extend_append(lfs_t *lfs,
         lfs_cache_t *pcache, lfs_cache_t *rcache,
         lfs_block_t head, lfs_size_t size,
         lfs_block_t *block, lfs_off_t *off,  lfs_block_t *nblock) {
+
+        lfs_size_t noff = size - 1;
+        lfs_off_t index = lfs_ctz_index(lfs, &noff);
 
         // prepare next state
         lfs->ctz_extend_next = ctz_extend_done;
@@ -2791,8 +2750,8 @@ static int ctz_extend_append(lfs_t *lfs,
         bool relocate = 0;
         for (lfs_off_t i = 0; i < skips; i++) {
             nhead = lfs_tole32(nhead);
-            err = lfs_bd_prog(lfs, pcache, rcache, true,
-                    nblock, 4*i, &nhead, 4);
+            int err = lfs_bd_prog(lfs, pcache, rcache, true,
+                    *nblock, 4*i, &nhead, 4);
             nhead = lfs_fromle32(nhead);
             if (err) {
                 if (err == LFS_ERR_CORRUPT) {
@@ -2818,12 +2777,13 @@ static int ctz_extend_append(lfs_t *lfs,
             lfs->ctz_extend_next = ctz_extend_relocate;
         } else {
             // If we get here the block allocation was successfull
-            *block = nblock;
+            *block = *nblock;
             *off = 4*skips;
         }
 
         return lfs->ctz_extend_next(lfs, pcache, rcache, head, size, block, off, nblock);
 }
+
 
 static int ctz_extend_copy_out(lfs_t *lfs,
         lfs_cache_t *pcache, lfs_cache_t *rcache,
@@ -2834,14 +2794,13 @@ static int ctz_extend_copy_out(lfs_t *lfs,
         lfs->ctz_extend_next = ctz_extend_append;
 
         lfs_size_t noff = size - 1;
-        lfs_off_t index = lfs_ctz_index(lfs, &noff);
         noff = noff + 1;
         
         // just copy out the last block if it is incomplete
         if (noff != lfs->cfg->block_size) {
             for (lfs_off_t i = 0; i < noff; i++) {
                 uint8_t data;
-                err = lfs_bd_read(lfs,
+                int err = lfs_bd_read(lfs,
                         NULL, rcache, noff-i,
                         head, i, &data, 1);
                 if (err) {
@@ -2850,7 +2809,7 @@ static int ctz_extend_copy_out(lfs_t *lfs,
 
                 err = lfs_bd_prog(lfs,
                         pcache, rcache, true,
-                        nblock, i, &data, 1);
+                        *nblock, i, &data, 1);
                 if (err) {
                     if (err == LFS_ERR_CORRUPT) {
                         // This was a goto relocate, stop the for loop
@@ -2861,7 +2820,7 @@ static int ctz_extend_copy_out(lfs_t *lfs,
                 }
             }
 
-            *block = nblock;
+            *block = *nblock;
             *off = noff;
             // Prepare the next call
             lfs->ctz_extend_next = ctz_extend_done;
@@ -2871,18 +2830,93 @@ static int ctz_extend_copy_out(lfs_t *lfs,
        return lfs->ctz_extend_next(lfs, pcache, rcache, head, size, block, off, nblock);
 }
 
+
+static int ctz_extend_nothing_to_write(lfs_t *lfs,
+        lfs_cache_t *pcache, lfs_cache_t *rcache,
+        lfs_block_t head, lfs_size_t size,
+        lfs_block_t *block, lfs_off_t *off,  lfs_block_t *nblock) {
+    // Next is copy_out
+    lfs->ctz_extend_next = ctz_extend_copy_out;
+
+    if (size == 0) {
+        *block = *nblock;
+        *off = 0;
+        // If nothing to write we are done
+        lfs->ctz_extend_next = ctz_extend_done;
+    }
+
+    return lfs->ctz_extend_next(lfs, pcache, rcache, head, size, block, off, nblock);
+}
+
+
+static int ctz_extend_block_erase(lfs_t *lfs,
+        lfs_cache_t *pcache, lfs_cache_t *rcache,
+        lfs_block_t head, lfs_size_t size,
+        lfs_block_t *block, lfs_off_t *off,  lfs_block_t *nblock) {
+
+        // TODO get the correct context here, just a dummy
+        lfs_file_t *file = lfs->lsf_cb_context[1].file;
+
+        // Prepare the next call
+        lfs->ctz_extend_next = ctz_extend_nothing_to_write;
+
+        // erase block
+        int err = lfs_bd_erase(lfs, *nblock);
+
+        // corrupt block block goto relocate (can only happen in blocking mode)
+        if (err) {
+            if (err == LFS_ERR_CORRUPT) {
+                // Set next action function
+                lfs->ctz_extend_next = ctz_extend_relocate;
+            }
+            else {
+                // TODO If it not a corrupt error we must propagete error
+                return err;
+            }
+        }
+
+        // If this is a non blocking call we just return
+        if (file->action_complete_cb == NULL) {
+            return LFS_ERR_OK;
+        }
+        else {
+            return lfs->ctz_extend_next(lfs, pcache, rcache, head, size, block, off, nblock);
+        }
+}
+
+static int ctz_extend_alloc(lfs_t *lfs,
+        lfs_cache_t *pcache, lfs_cache_t *rcache,
+        lfs_block_t head, lfs_size_t size,
+        lfs_block_t *block, lfs_off_t *off, lfs_block_t *nblock) {
+
+        // go ahead and grab a block
+        int err = lfs_alloc(lfs, nblock);
+        if (err) {
+            return err;
+        }
+
+        // call erase
+        return ctz_extend_block_erase(lfs, pcache, rcache, head, size, block, off, nblock);
+}
+
 // the rest ..
 static int lfs_ctz_extend(lfs_t *lfs,
         lfs_cache_t *pcache, lfs_cache_t *rcache,
         lfs_block_t head, lfs_size_t size,
         lfs_block_t *block, lfs_off_t *off) {
 
-    lfs_block_t nblock;
+    // Enter a new context
+    // TODO take the correct context here, just a dummy
+    lfs->lsf_cb_context[1].file  = lfs->lsf_cb_context[0].file;
+    lfs->lsf_cb_context[1].lfs    = lfs;
+    lfs->lsf_cb_context[1].pcache = pcache;
+    lfs->lsf_cb_context[1].rcache = rcache;
+    lfs->lsf_cb_context[1].head   = head;
+    lfs->lsf_cb_context[1].size   = size;
+    lfs->lsf_cb_context[1].off    = off;
+    lfs_block_t *nblock_ptr = &lfs->lsf_cb_context[1].nblock;
     // alloc block
-    int err = ctz_extend_alloc(lfs, pcache, rcache, head, size, block, off, &nblock);
-    if (err) {
-        return err;
-    }
+    return ctz_extend_alloc(lfs, pcache, rcache, head, size, block, off, nblock_ptr);
 }
 #endif
 

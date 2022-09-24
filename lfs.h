@@ -438,7 +438,7 @@ typedef struct lfs {
         lfs_size_t size;
         lfs_block_t *block;
         lfs_off_t *off;
-        lfs_block_t *nblock;
+        lfs_block_t nblock;
    } lsf_cb_context[CB_STACK_SIZE];
 } lfs_t;
 

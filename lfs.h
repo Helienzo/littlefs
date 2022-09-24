@@ -422,6 +422,23 @@ typedef struct lfs {
 #ifdef LFS_MIGRATE
     struct lfs1 *lfs1;
 #endif
+
+    lfs_ssize_t (*flushedwrite_next)(struct lfs *lfs, lfs_file_t *file, const uint8_t **data, lfs_size_t *nsize);
+    int (*ctz_extend_next)(struct lfs *lfs, lfs_cache_t *pcache, lfs_cache_t *rcache, lfs_block_t head, lfs_size_t size, lfs_block_t *block, lfs_off_t *off,  lfs_block_t *nblock);
+
+    struct lsf_cb_context {
+        struct lfs *lfs;
+        lfs_file_t *file;
+        const uint8_t **data;
+        lfs_size_t *nsize;
+        lfs_cache_t *pcache;
+        lfs_cache_t *rcache;
+        lfs_block_t head;
+        lfs_size_t size;
+        lfs_block_t *block;
+        lfs_off_t *off;
+        lfs_block_t *nblock;
+   } lsf_cb_context[10];
 } lfs_t;
 
 

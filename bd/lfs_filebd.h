@@ -66,6 +66,7 @@ int lfs_filebd_erase(const struct lfs_config *cfg, lfs_block_t block);
 // Sync the block device
 int lfs_filebd_sync(const struct lfs_config *cfg);
 
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif

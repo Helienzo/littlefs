@@ -3361,6 +3361,8 @@ static lfs_ssize_t flushedwrite_write_block(lfs_t *lfs, lfs_file_t *file, const 
 }
 
 static lfs_ssize_t flushedwrite_find_block(lfs_t *lfs, lfs_file_t *file, const uint8_t **data, lfs_size_t *nsize) {
+    // Prepare for non blocking call, the next state is flushedwrite_write_block
+    lfs->flushedwrite_next = flushedwrite_write_block;
     // check if we need a new block
     if (!(file->flags & LFS_F_WRITING) ||
             file->off == lfs->cfg->block_size) {
@@ -3381,23 +3383,25 @@ static lfs_ssize_t flushedwrite_find_block(lfs_t *lfs, lfs_file_t *file, const u
 
             // extend file with new blocks
             lfs_alloc_ack(lfs);
+            file->flags |= LFS_F_WRITING;
             int err = lfs_ctz_extend(lfs, &file->cache, &lfs->rcache,
                     file->block, file->pos,
                     &file->block, &file->off);
             if (err) {
+                file->flags &= ~LFS_F_WRITING;
                 file->flags |= LFS_F_ERRED;
                 return err;
             }
         } else {
             file->block = LFS_BLOCK_INLINE;
             file->off = file->pos;
+            file->flags |= LFS_F_WRITING;
         }
-        file->flags |= LFS_F_WRITING;
     }
 
     if (file->action_complete_cb == NULL) {
         // Do a blocking call
-        int err = flushedwrite_write_block(lfs, file, data, nsize);
+        int err = lfs->flushedwrite_next(lfs, file, data, nsize);
         return err;
     }
     else {

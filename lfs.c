@@ -28,7 +28,6 @@ enum {
 
 
 /// Caching block device operations ///
-int lfs_register_command_done_callback(lfs_t *lfs, lfs_ssize_t (*cb)(lfs_t *lfs, lfs_ssize_t err_code));
 static inline void lfs_cache_drop(lfs_t *lfs, lfs_cache_t *rcache) {
     // do not zero, cheaper if cache is readonly or only going to be
     // written with identical data (during relocates)

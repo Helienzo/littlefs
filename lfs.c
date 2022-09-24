@@ -3425,6 +3425,7 @@ static lfs_ssize_t lfs_file_rawread(lfs_t *lfs, lfs_file_t *file,
 
 
 #ifndef LFS_READONLY
+// ********************* FLUSHEDWRITE *********************
 static lfs_ssize_t flushedwrite_find_block(lfs_t *lfs);
 static lfs_ssize_t flushedwrite_write_block(lfs_t *lfs);
 static lfs_ssize_t flushedwrite_done(lfs_t *lfs, lfs_ssize_t retval);
@@ -3466,6 +3467,7 @@ static lfs_ssize_t flushedwrite_write_block(lfs_t *lfs) {
 }
 
 static lfs_ssize_t flushedwrite_ctx_extend_done(lfs_t *lfs, lfs_ssize_t retval) {
+    ctz_extend_register_callback(lfs, NULL);
     if (retval) {
         // Error
         lfs->workspace.file->flags |= LFS_F_ERRED;
@@ -3551,14 +3553,28 @@ static lfs_ssize_t flushedwrite_done(lfs_t *lfs, lfs_ssize_t retval) {
     return retval;
 }
 
+static lfs_ssize_t flushedwrite_register_callback(lfs_t *lfs, lfs_ssize_t (*cb)(struct lfs *lfs, lfs_ssize_t retval)) {
+    if (cb != NULL) {
+        lfs->workspace.flushedwrite.flushedwrite_done_cb = cb;
+        return LFS_ERR_OK;
+    }
+    else {
+        lfs->workspace.flushedwrite.flushedwrite_done_cb = NULL;
+        return LFS_ERR_INVAL;
+    }
+}
+
+// ********************* FLUSHEDWRITE *********************
 static lfs_ssize_t file_rawwrite_done(lfs_t *lfs, lfs_ssize_t retval) {
+
     // Reset the callback
-    lfs->workspace.flushedwrite.flushedwrite_done_cb = NULL;
-    if (retval < 0) {
-        return retval;
+    flushedwrite_register_callback(lfs, NULL);
+
+    // Reset the error flag
+    if (retval >= 0) {
+        lfs->workspace.file->flags &= ~LFS_F_ERRED;
     }
 
-    lfs->workspace.file->flags &= ~LFS_F_ERRED;
     return retval;
 }
 
@@ -3570,12 +3586,12 @@ static lfs_ssize_t rawwrite_fill_with_zero(lfs_t *lfs, lfs_ssize_t retval) {
     // Check next state
     if (lfs->workspace.file->pos < lfs->workspace.rawwrite.pos) {
         // We are not done with this state yet
-        lfs->workspace.flushedwrite.flushedwrite_done_cb = rawwrite_fill_with_zero;
+        flushedwrite_register_callback(lfs, rawwrite_fill_with_zero);
         return lfs_file_flushedwrite(lfs, lfs->workspace.file, &(uint8_t){0}, 1);
     }
     else {
         // Go to next state
-        lfs->workspace.flushedwrite.flushedwrite_done_cb = file_rawwrite_done;
+        flushedwrite_register_callback(lfs, file_rawwrite_done);
         return lfs_file_flushedwrite(lfs, lfs->workspace.file, lfs->workspace.rawwrite.buffer, lfs->workspace.rawwrite.size);
     }
 
@@ -3615,9 +3631,10 @@ static lfs_ssize_t lfs_file_rawwrite(lfs_t *lfs, lfs_file_t *file,
     }
 
     // Set callback
-    lfs->workspace.flushedwrite.flushedwrite_done_cb = file_rawwrite_done;
+    flushedwrite_register_callback(lfs, file_rawwrite_done);
     return lfs_file_flushedwrite(lfs, file, buffer, size);
 }
+// ********************* RAWWRITE *********************
 #endif
 
 static lfs_soff_t lfs_file_rawseek(lfs_t *lfs, lfs_file_t *file,
@@ -5488,8 +5505,11 @@ int lfs_format(lfs_t *lfs, const struct lfs_config *cfg) {
             cfg->read_buffer, cfg->prog_buffer, cfg->lookahead_buffer,
             cfg->name_max, cfg->file_max, cfg->attr_max);
 
+    // Init callbacks to null
     lfs->lfs_bd_callbacks.erase_cb = NULL;
-    lfs->workspace.flushedwrite.flushedwrite_done_cb = NULL;
+    ctz_extend_register_callback(lfs, NULL);
+    flushedwrite_register_callback(lfs, NULL);
+
     err = lfs_rawformat(lfs, cfg);
 
     LFS_TRACE("lfs_format -> %d", err);

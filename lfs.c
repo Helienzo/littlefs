@@ -152,40 +152,102 @@ static int lfs_bd_cmp(lfs_t *lfs,
 }
 
 #ifndef LFS_READONLY
-static int lfs_bd_flush(lfs_t *lfs,
-        lfs_cache_t *pcache, lfs_cache_t *rcache, bool validate) {
-    if (pcache->block != LFS_BLOCK_NULL && pcache->block != LFS_BLOCK_INLINE) {
-        LFS_ASSERT(pcache->block < lfs->cfg->block_count);
-        lfs_size_t diff = lfs_alignup(pcache->size, lfs->cfg->prog_size);
-        int err = lfs->cfg->prog(lfs->cfg, pcache->block,
-                pcache->off, pcache->buffer, diff);
-        LFS_ASSERT(err <= 0);
-        if (err) {
-            return err;
-        }
+// ********************* BD_FLUSH *********************
+static int bd_flush_prog_done(const struct lfs_config *c, int err_code);
+static int bd_flush_done(lfs_t *lfs, int retval);
+static lfs_ssize_t bd_flush_register_callback(lfs_t *lfs, lfs_ssize_t (*cb)(struct lfs *lfs, lfs_ssize_t retval));
 
-        if (validate) {
-            // check data on disk
-            lfs_cache_drop(lfs, rcache);
-            int res = lfs_bd_cmp(lfs,
-                    NULL, rcache, diff,
-                    pcache->block, pcache->off, pcache->buffer, diff);
-            if (res < 0) {
-                return res;
-            }
+static lfs_ssize_t bd_flush_register_callback(lfs_t *lfs, lfs_ssize_t (*cb)(struct lfs *lfs, lfs_ssize_t retval)) {
+    if (cb != NULL) {
+        lfs->workspace.bd_flush.bd_flush_done_cb = cb;
+        return LFS_ERR_OK;
+    }
+    else {
+        lfs->workspace.bd_flush.bd_flush_done_cb = NULL;
+        return LFS_ERR_INVAL;
+    }
+}
 
-            if (res != LFS_CMP_EQ) {
-                return LFS_ERR_CORRUPT;
-            }
-        }
+static int bd_flush_prog_done(const struct lfs_config *c, int err_code) {
 
-        lfs_cache_zero(lfs, pcache);
+    // Reset callback
+    (*c->current_lfs)->lfs_bd_callbacks.prog_cb = NULL;
+
+    lfs_t *lfs = *(c->current_lfs);
+
+    LFS_ASSERT(err_code <= 0);
+    if (err_code) {
+        return bd_flush_done(lfs, err_code);
     }
 
-    return 0;
-}
-#endif
+    if (lfs->workspace.bd_flush.validate) {
+        // check data on disk
+        lfs_cache_drop(lfs, lfs->workspace.bd_flush.rcache);
+        int res = lfs_bd_cmp(lfs,
+                NULL, lfs->workspace.bd_flush.rcache, lfs->workspace.bd_flush.diff,
+                lfs->workspace.bd_flush.pcache->block, lfs->workspace.bd_flush.pcache->off, lfs->workspace.bd_flush.pcache->buffer, lfs->workspace.bd_flush.diff);
+        if (res < 0) {
+            return bd_flush_done(lfs, res);
+        }
 
+        if (res != LFS_CMP_EQ) {
+            return bd_flush_done(lfs, LFS_ERR_CORRUPT);
+        }
+    }
+
+    lfs_cache_zero(lfs, lfs->workspace.bd_flush.pcache);
+    // Command successful
+    return bd_flush_done(lfs, 0);
+}
+
+static int bd_flush_done(lfs_t *lfs, int retval) {
+    if (lfs->workspace.bd_flush.bd_flush_done_cb != NULL) {
+        // Call caller if this was a non blocking call
+        return lfs->workspace.bd_flush.bd_flush_done_cb(lfs, retval);
+    }
+    else {
+        return retval;
+    }
+}
+
+static int lfs_bd_flush(lfs_t *lfs,
+        lfs_cache_t *pcache, lfs_cache_t *rcache, bool validate) {
+
+    // Store workspace
+    *(lfs->cfg->current_lfs)         = lfs;
+    lfs->workspace.bd_flush.validate = validate;
+    lfs->workspace.bd_flush.pcache   = pcache;
+    lfs->workspace.bd_flush.rcache   = rcache;
+
+
+    if (pcache->block != LFS_BLOCK_NULL && pcache->block != LFS_BLOCK_INLINE) {
+        LFS_ASSERT(pcache->block < lfs->cfg->block_count);
+
+        lfs->workspace.bd_flush.diff = lfs_alignup(pcache->size, lfs->cfg->prog_size);
+
+        // Write to flash
+        if (lfs->action_complete_cb == NULL && lfs->workspace.bd_flush.bd_flush_done_cb == NULL) {
+            // Make sure to clear callback
+            lfs->lfs_bd_callbacks.prog_cb = NULL;
+            // Call prog
+            int err = lfs->cfg->prog(lfs->cfg, pcache->block,
+                    pcache->off, pcache->buffer, lfs->workspace.bd_flush.diff);
+
+            // Call next state
+            return bd_flush_prog_done(lfs->cfg, err);
+        } else {
+            // Set callback
+            lfs->lfs_bd_callbacks.prog_cb = bd_flush_prog_done;
+            // Call Prog
+            return lfs->cfg->prog(lfs->cfg, pcache->block,
+                    pcache->off, pcache->buffer, lfs->workspace.bd_flush.diff);
+        }
+    }
+
+    return bd_flush_done(lfs, 0);
+}
+// ********************* BD_FLUSH *********************
+#endif
 #ifndef LFS_READONLY
 static int lfs_bd_sync(lfs_t *lfs,
         lfs_cache_t *pcache, lfs_cache_t *rcache, bool validate) {
@@ -5647,6 +5709,7 @@ int lfs_format(lfs_t *lfs, const struct lfs_config *cfg) {
     lfs_register_command_done_callback(lfs, NULL);
     file_flush_register_callback(lfs, NULL);
     rawsync_register_callback(lfs, NULL);
+    bd_flush_register_callback(lfs, NULL);
 
     err = lfs_rawformat(lfs, cfg);
 

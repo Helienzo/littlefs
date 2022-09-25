@@ -423,12 +423,21 @@ struct lfs {
     lfs_ssize_t (*action_complete_cb)(struct lfs *lfs, lfs_ssize_t err_code);
     union {
         int (*erase_cb)(const struct lfs_config *c, int err_code);
+        int (*prog_cb)(const struct lfs_config *c, int err_code);
     } lfs_bd_callbacks;
 
     struct lsf_workspace {
         // Common for all steps
         struct lfs *lfs;
         lfs_file_t *file;
+        // bd_flush
+        struct lfs_bd_flush{
+            lfs_ssize_t (*bd_flush_done_cb)(struct lfs *lfs, lfs_ssize_t retval);
+            bool validate;
+            lfs_cache_t *pcache;
+            lfs_cache_t *rcache;
+            lfs_size_t diff;
+        } bd_flush;
         // rawsync
         struct lfs_rawsync{
             lfs_ssize_t (*rawsync_done_cb)(struct lfs *lfs, lfs_ssize_t retval);

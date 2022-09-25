@@ -2429,9 +2429,32 @@ static int lfs_dir_orphaningcommit(lfs_t *lfs, lfs_mdir_t *dir,
 #endif
 
 #ifndef LFS_READONLY
-static int lfs_dir_commit(lfs_t *lfs, lfs_mdir_t *dir,
-        const struct lfs_mattr *attrs, int attrcount) {
-    int orphans = lfs_dir_orphaningcommit(lfs, dir, attrs, attrcount);
+// ********************* DIR_COMMIT *********************
+static int dir_commit_done(lfs_t *lfs, int retval);
+static lfs_ssize_t dir_commit_register_callback(lfs_t *lfs, lfs_ssize_t (*cb)(struct lfs *lfs, lfs_ssize_t retval));
+
+static lfs_ssize_t dir_commit_register_callback(lfs_t *lfs, lfs_ssize_t (*cb)(struct lfs *lfs, lfs_ssize_t retval)) {
+    if (cb != NULL) {
+        lfs->workspace.dir_commit.dir_commit_done_cb = cb;
+        return LFS_ERR_OK;
+    }
+    else {
+        lfs->workspace.dir_commit.dir_commit_done_cb = NULL;
+        return LFS_ERR_INVAL;
+    }
+}
+
+static int dir_commit_done(lfs_t *lfs, int retval) {
+    if (lfs->workspace.dir_commit.dir_commit_done_cb != NULL) {
+        // Call caller if this was a non blocking call
+        return lfs->workspace.dir_commit.dir_commit_done_cb(lfs, retval);
+    }
+    else {
+        return retval;
+    }
+}
+
+static int dir_commit_orphaningcommit_done(lfs_t *lfs, int orphans) {
     if (orphans < 0) {
         return orphans;
     }
@@ -2442,12 +2465,28 @@ static int lfs_dir_commit(lfs_t *lfs, lfs_mdir_t *dir,
         // created some
         int err = lfs_fs_deorphan(lfs, false);
         if (err) {
-            return err;
+            return dir_commit_done(lfs, err);
         }
     }
 
-    return 0;
+    // Command successful
+    return dir_commit_done(lfs, 0);
 }
+
+static int lfs_dir_commit(lfs_t *lfs, lfs_mdir_t *dir,
+        const struct lfs_mattr *attrs, int attrcount) {
+
+    if (lfs->workspace.dir_commit.dir_commit_done_cb != NULL) {
+        // Call caller if this was a non blocking call
+        // TODO register dir_commit_orphaningcommit_done
+        return lfs_dir_orphaningcommit(lfs, dir, attrs, attrcount);
+    }
+    else {
+        int orphans = lfs_dir_orphaningcommit(lfs, dir, attrs, attrcount);
+        return dir_commit_orphaningcommit_done(lfs, orphans);
+    }
+}
+// ********************* DIR_COMMIT *********************
 #endif
 
 
@@ -5717,6 +5756,7 @@ int lfs_format(lfs_t *lfs, const struct lfs_config *cfg) {
     file_flush_register_callback(lfs, NULL);
     rawsync_register_callback(lfs, NULL);
     bd_flush_register_callback(lfs, NULL);
+    dir_commit_register_callback(lfs, NULL);
 
     err = lfs_rawformat(lfs, cfg);
 

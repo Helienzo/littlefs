@@ -430,6 +430,10 @@ struct lfs {
         // Common for all steps
         struct lfs *lfs;
         lfs_file_t *file;
+        // dir_commit
+        struct lfs_dir_commit{
+            lfs_ssize_t (*dir_commit_done_cb)(struct lfs *lfs, lfs_ssize_t retval);
+        } dir_commit;
         // bd_flush
         struct lfs_bd_flush{
             lfs_ssize_t (*bd_flush_done_cb)(struct lfs *lfs, lfs_ssize_t retval);

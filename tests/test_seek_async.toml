@@ -170,6 +170,7 @@ code = '''
 
         lfs_register_command_done_callback(&lfs, lfs_testbd_action_complete_cb);
         lfs_file_sync(&lfs, &file) => 0;
+        lfs_testbd_call_queued() => 0;
 
         lfs_file_seek(&lfs, &file, 0, LFS_SEEK_SET) => 0;
         lfs_file_read(&lfs, &file, buffer, size) => size;
@@ -267,6 +268,8 @@ code = '''
 
     lfs_register_command_done_callback(&lfs, lfs_testbd_action_complete_cb);
     lfs_file_sync(&lfs, &file) => 0;
+    lfs_testbd_call_queued() => false;
+
     lfs_file_tell(&lfs, &file) => SIZE;
     lfs_file_size(&lfs, &file) => SIZE;
 
@@ -278,6 +281,8 @@ code = '''
 
         lfs_register_command_done_callback(&lfs, lfs_testbd_action_complete_cb);
         lfs_file_sync(&lfs, &file) => 0;
+        lfs_testbd_call_queued() => false;
+
         lfs_file_tell(&lfs, &file) => i+1;
         lfs_file_size(&lfs, &file) => SIZE;
         if (i < SIZE-2) {
@@ -303,6 +308,8 @@ code = '''
 
     lfs_register_command_done_callback(&lfs, lfs_testbd_action_complete_cb);
     lfs_file_sync(&lfs, &file) => 0;
+    lfs_testbd_call_queued() => false;
+
     lfs_file_tell(&lfs, &file) => SIZE;
     lfs_file_size(&lfs, &file) => SIZE;
 
@@ -366,8 +373,11 @@ code = '''
             lfs_file_seek(&lfs, &file, off*size, LFS_SEEK_SET) => off*size;
             lfs_file_read(&lfs, &file, buffer, size) => size;
             assert(memcmp(buffer, "doggodogdog", size) == 0);
+
             lfs_register_command_done_callback(&lfs, lfs_testbd_action_complete_cb);
             lfs_file_sync(&lfs, &file) => 0;
+            lfs_testbd_call_queued() => false;
+
             lfs_file_seek(&lfs, &file, off*size, LFS_SEEK_SET) => off*size;
             lfs_file_read(&lfs, &file, buffer, size) => size;
             assert(memcmp(buffer, "doggodogdog", size) == 0);

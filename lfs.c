@@ -3424,8 +3424,12 @@ static lfs_ssize_t rawsync_file_flush_done_cb(lfs_t *lfs, lfs_ssize_t retval) {
 
 static int rawsync_done(lfs_t *lfs, int retval) {
     if (lfs->workspace.rawsync.rawsync_done_cb != NULL) {
+        // TODO do we need to reset the command done here?:
         // Call caller if this was a non blocking call
-        return lfs->workspace.rawsync.rawsync_done_cb(lfs, retval);
+        lfs->workspace.rawsync.rawsync_done_cb(lfs, retval);
+        // Reset callback
+        lfs_register_command_done_callback(lfs, NULL);
+        return retval;
     }
     else {
         return retval;
@@ -5867,6 +5871,11 @@ int lfs_file_sync(lfs_t *lfs, lfs_file_t *file) {
     LFS_TRACE("lfs_file_sync(%p, %p)", (void*)lfs, (void*)file);
     LFS_ASSERT(lfs_mlist_isopen(lfs->mlist, (struct lfs_mlist*)file));
 
+    if (lfs->action_complete_cb != NULL) {
+        rawsync_register_callback(lfs, lfs->action_complete_cb);
+    } else {
+        rawsync_register_callback(lfs, NULL);
+    }
     err = lfs_file_rawsync(lfs, file);
 
     LFS_TRACE("lfs_file_sync -> %d", err);

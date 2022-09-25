@@ -226,7 +226,7 @@ static int lfs_bd_flush(lfs_t *lfs,
         lfs->workspace.bd_flush.diff = lfs_alignup(pcache->size, lfs->cfg->prog_size);
 
         // Write to flash
-        if (lfs->action_complete_cb == NULL && lfs->workspace.bd_flush.bd_flush_done_cb == NULL) {
+        if (lfs->action_complete_cb == NULL || lfs->workspace.bd_flush.bd_flush_done_cb == NULL) {
             // Make sure to clear callback
             lfs->lfs_bd_callbacks.prog_cb = NULL;
             // Call prog
@@ -3334,20 +3334,27 @@ static int file_flush_relocate(lfs_t *lfs) {
     // Try to write to new block
     return file_flush_writeout(lfs);
 }
+static lfs_ssize_t file_flush_bd_flush_done(struct lfs *lfs, lfs_ssize_t retval);
 
-static int file_flush_writeout(lfs_t *lfs) {
-    // write out what we have
-    int err = lfs_bd_flush(lfs, &lfs->workspace.file->cache, &lfs->rcache, true);
-    if (err) {
-        if (err == LFS_ERR_CORRUPT) {
+static lfs_ssize_t file_flush_bd_flush_done(lfs_t *lfs, lfs_ssize_t retval) {
+    // Reset callback
+    bd_flush_register_callback(lfs, NULL);
+    if (retval) {
+        if (retval == LFS_ERR_CORRUPT) {
             // Find a different block
             return file_flush_relocate(lfs);
         }
         // Command failed
-        return file_flush_done(lfs, err);
+        return file_flush_done(lfs, retval);
     }
     // Command successful, call last step
     return file_flush_done(lfs, LFS_ERR_OK);
+}
+
+static int file_flush_writeout(lfs_t *lfs) {
+    // write out what we have
+    bd_flush_register_callback(lfs, file_flush_bd_flush_done);
+    return lfs_bd_flush(lfs, &lfs->workspace.file->cache, &lfs->rcache, true);
 }
 
 static int file_flush_done(lfs_t *lfs, int retval) {

@@ -384,6 +384,17 @@ typedef struct lfs_gstate {
     uint32_t tag;
     lfs_block_t pair[2];
 } lfs_gstate_t;
+// commit logic
+struct lfs_com {
+    lfs_block_t block;
+    lfs_off_t off;
+    uint32_t ptag;
+    uint32_t crc;
+
+    lfs_off_t begin;
+    lfs_off_t end;
+} lfs_commit;
+
 
 // The littlefs filesystem type
 struct lfs {
@@ -430,6 +441,27 @@ struct lfs {
         // Common for all steps
         struct lfs *lfs;
         lfs_file_t *file;
+        // dir_compact
+        struct lfs_dir_compact{
+            lfs_ssize_t (*dir_compact_done_cb)(struct lfs *lfs, lfs_ssize_t retval);
+            lfs_mdir_t *dir;
+            // lfs_mattr
+            const void *attrs;
+            int attrcount;
+            lfs_mdir_t *source;
+            uint16_t begin;
+            uint16_t end;
+            bool relocated;
+            bool tired;
+            struct lfs_commit {
+                lfs_block_t block;
+                lfs_off_t off;
+                uint32_t ptag;
+                uint32_t crc;
+                lfs_off_t begin;
+                lfs_off_t end;
+            } commit;
+        } dir_compact;
         // dir_commit
         struct lfs_dir_commit{
             lfs_ssize_t (*dir_commit_done_cb)(struct lfs *lfs, lfs_ssize_t retval);

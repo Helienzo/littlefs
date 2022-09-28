@@ -2284,6 +2284,317 @@ fixmlist:;
 #endif
 
 #ifndef LFS_READONLY
+// ********************* DIR_ORPHANINGCOMMIT *********************
+static lfs_ssize_t dir_orphaningcommit_register_callback(lfs_t *lfs, lfs_ssize_t (*cb)(struct lfs *lfs, lfs_ssize_t retval));
+static int dir_orphaningcommit_commit(lfs_t *lfs);
+static int dir_orphaningcommit_commit_done(lfs_t *lfs, int state);
+static int dir_orphaningcommit_droped(lfs_t *lfs, int state);
+static int dir_orphaningcommit_droped_done(lfs_t *lfs, int state);
+static int dir_orphaningcommit_relocated(lfs_t *lfs, int state);
+static int dir_orphaningcommit_relocated_done(lfs_t *lfs, int state);
+static int dir_orphaningcommit_pred(lfs_t *lfs, int state);
+static int dir_orphaningcommit_replace_bad_pair(lfs_t *lfs, int state);
+static int dir_orphaningcommit_done(lfs_t *lfs, int retval);
+
+static lfs_ssize_t dir_orphaningcommit_register_callback(lfs_t *lfs, lfs_ssize_t (*cb)(struct lfs *lfs, lfs_ssize_t retval)) {
+    if (cb != NULL) {
+        lfs->workspace.orphaningcommit.orphaningcommit_done_cb = cb;
+        return LFS_ERR_OK;
+    }
+    else {
+        lfs->workspace.orphaningcommit.orphaningcommit_done_cb  = NULL;
+        return LFS_ERR_INVAL;
+    }
+}
+
+static int dir_orphaningcommit_commit(lfs_t *lfs) {
+
+    lfs->workspace.orphaningcommit.lpair[0] = lfs->workspace.orphaningcommit.dir->pair[0];
+    lfs->workspace.orphaningcommit.lpair[1] = lfs->workspace.orphaningcommit.dir->pair[1];
+
+    lfs->workspace.orphaningcommit.ldir = *lfs->workspace.orphaningcommit.dir;
+    //lfs->orphaningcommit.pdir;
+
+    if (lfs->workspace.orphaningcommit.orphaningcommit_done_cb != NULL) {
+        // Non blocking call
+        // TODO register next state dir_orphaningcommit_commit_done
+        return lfs_dir_relocatingcommit(lfs, &lfs->workspace.orphaningcommit.ldir, lfs->workspace.orphaningcommit.dir->pair,
+                lfs->workspace.orphaningcommit.attrs, lfs->workspace.orphaningcommit.attrcount, &lfs->workspace.orphaningcommit.pdir);
+    }
+    else {
+        // Blocking call
+        int state = lfs_dir_relocatingcommit(lfs, &lfs->workspace.orphaningcommit.ldir, lfs->workspace.orphaningcommit.dir->pair,
+                lfs->workspace.orphaningcommit.attrs, lfs->workspace.orphaningcommit.attrcount, &lfs->workspace.orphaningcommit.pdir);
+        // Call next state
+        return dir_orphaningcommit_commit_done(lfs, state);
+    }
+}
+
+static int dir_orphaningcommit_commit_done(lfs_t *lfs, int state) {
+    if (state < 0) {
+        return dir_orphaningcommit_done(lfs, state);
+    }
+
+    // update if we're not in mlist, note we may have already been
+    // updated if we are in mlist
+    if (lfs_pair_cmp(lfs->workspace.orphaningcommit.dir->pair, lfs->workspace.orphaningcommit.lpair) == 0) {
+        *lfs->workspace.orphaningcommit.dir = lfs->workspace.orphaningcommit.ldir;
+    }
+
+    return dir_orphaningcommit_droped(lfs, state);
+}
+
+static int dir_orphaningcommit_droped(lfs_t *lfs, int state) {
+    // commit was successful, but may require other changes in the
+    // filesystem, these would normally be tail recursive, but we have
+    // flattened them here avoid unbounded stack usage
+    // need to drop?
+    if (state == LFS_OK_DROPPED) {
+        // steal state
+        int err = lfs_dir_getgstate(lfs, lfs->workspace.orphaningcommit.dir, &lfs->gdelta);
+        if (err) {
+            return dir_orphaningcommit_done(lfs, err);
+        }
+
+        // steal tail, note that this can't create a recursive drop
+        lfs->workspace.orphaningcommit.lpair[0] = lfs->workspace.orphaningcommit.pdir.pair[0];
+        lfs->workspace.orphaningcommit.lpair[1] = lfs->workspace.orphaningcommit.pdir.pair[1];
+        lfs_pair_tole32(lfs->workspace.orphaningcommit.dir->tail);
+        if (lfs->workspace.orphaningcommit.orphaningcommit_done_cb != NULL) {
+            // Non blocking call
+            // TODO register next state dir_orphaningcommit_droped_done
+            return lfs_dir_relocatingcommit(lfs, &lfs->workspace.orphaningcommit.pdir, lfs->workspace.orphaningcommit.lpair, LFS_MKATTRS(
+                {LFS_MKTAG(LFS_TYPE_TAIL + lfs->workspace.orphaningcommit.dir->split, 0x3ff, 8),
+                    lfs->workspace.orphaningcommit.dir->tail}),
+            NULL);
+        }
+        else {
+            // Blocking call
+            state = lfs_dir_relocatingcommit(lfs, &lfs->workspace.orphaningcommit.pdir, lfs->workspace.orphaningcommit.lpair, LFS_MKATTRS(
+                {LFS_MKTAG(LFS_TYPE_TAIL + lfs->workspace.orphaningcommit.dir->split, 0x3ff, 8),
+                    lfs->workspace.orphaningcommit.dir->tail}),
+            NULL);
+            // Call next state
+            return dir_orphaningcommit_droped_done(lfs, state);
+        }
+    } else {
+        return dir_orphaningcommit_relocated(lfs, state);
+    }
+}
+
+static int dir_orphaningcommit_droped_done(lfs_t *lfs, int state) {
+    lfs_pair_fromle32(lfs->workspace.orphaningcommit.dir->tail);
+    if (state < 0) {
+        return dir_orphaningcommit_done(lfs, state);
+    }
+
+    lfs->workspace.orphaningcommit.ldir = lfs->workspace.orphaningcommit.pdir;
+    return dir_orphaningcommit_relocated(lfs, state);
+}
+
+static int dir_orphaningcommit_relocated(lfs_t *lfs, int state) {
+
+    // need to relocate?
+    lfs->workspace.orphaningcommit.orphans = false;
+    if (state != LFS_OK_RELOCATED) {
+        // Command successful
+        return dir_orphaningcommit_done(lfs, 0);
+    }
+
+    LFS_DEBUG("Relocating {0x%"PRIx32", 0x%"PRIx32"} "
+                "-> {0x%"PRIx32", 0x%"PRIx32"}",
+            lfs->workspace.orphaningcommit.lpair[0], lfs->workspace.orphaningcommit.lpair[1], lfs->workspace.orphaningcommit.ldir.pair[0], lfs->workspace.orphaningcommit.ldir.pair[1]);
+    state = 0;
+
+    // update internal root
+    if (lfs_pair_cmp(lfs->workspace.orphaningcommit.lpair, lfs->root) == 0) {
+        lfs->root[0] = lfs->workspace.orphaningcommit.ldir.pair[0];
+        lfs->root[1] = lfs->workspace.orphaningcommit.ldir.pair[1];
+    }
+
+    // update internally tracked dirs
+    for (struct lfs_mlist *d = lfs->mlist; d; d = d->next) {
+        if (lfs_pair_cmp(lfs->workspace.orphaningcommit.lpair, d->m.pair) == 0) {
+            d->m.pair[0] = lfs->workspace.orphaningcommit.ldir.pair[0];
+            d->m.pair[1] = lfs->workspace.orphaningcommit.ldir.pair[1];
+        }
+
+        if (d->type == LFS_TYPE_DIR &&
+                lfs_pair_cmp(lfs->workspace.orphaningcommit.lpair, ((lfs_dir_t*)d)->head) == 0) {
+            ((lfs_dir_t*)d)->head[0] = lfs->workspace.orphaningcommit.ldir.pair[0];
+            ((lfs_dir_t*)d)->head[1] = lfs->workspace.orphaningcommit.ldir.pair[1];
+        }
+    }
+
+    // find parent
+    lfs_stag_t tag = lfs_fs_parent(lfs, lfs->workspace.orphaningcommit.lpair, &lfs->workspace.orphaningcommit.pdir);
+    if (tag < 0 && tag != LFS_ERR_NOENT) {
+        return dir_orphaningcommit_done(lfs, tag);
+    }
+
+    lfs->workspace.orphaningcommit.hasparent = (tag != LFS_ERR_NOENT);
+    if (tag != LFS_ERR_NOENT) {
+        // note that if we have a parent, we must have a pred, so this will
+        // always create an orphan
+        int err = lfs_fs_preporphans(lfs, +1);
+        if (err) {
+            return dir_orphaningcommit_done(lfs, err);
+        }
+
+        // fix pending move in this pair? this looks like an optimization but
+        // is in fact _required_ since relocating may outdate the move.
+        uint16_t moveid = 0x3ff;
+        if (lfs_gstate_hasmovehere(&lfs->gstate, lfs->workspace.orphaningcommit.pdir.pair)) {
+            moveid = lfs_tag_id(lfs->gstate.tag);
+            LFS_DEBUG("Fixing move while relocating "
+                    "{0x%"PRIx32", 0x%"PRIx32"} 0x%"PRIx16"\n",
+                    lfs->workspace.orphaningcommit.pdir.pair[0], lfs->workspace.orphaningcommit.pdir.pair[1], moveid);
+            lfs_fs_prepmove(lfs, 0x3ff, NULL);
+            if (moveid < lfs_tag_id(tag)) {
+                tag -= LFS_MKTAG(0, 1, 0);
+            }
+        }
+
+        lfs->workspace.orphaningcommit.ppair[0] = lfs->workspace.orphaningcommit.pdir.pair[0];
+        lfs->workspace.orphaningcommit.ppair[1] = lfs->workspace.orphaningcommit.pdir.pair[1];
+
+        lfs_pair_tole32(lfs->workspace.orphaningcommit.ldir.pair);
+        // TODO return
+        if (lfs->workspace.orphaningcommit.orphaningcommit_done_cb != NULL) {
+            // TODO register to continue on nest state 
+            return lfs_dir_relocatingcommit(lfs, &lfs->workspace.orphaningcommit.pdir, lfs->workspace.orphaningcommit.ppair, LFS_MKATTRS(
+                        {LFS_MKTAG_IF(moveid != 0x3ff,
+                            LFS_TYPE_DELETE, moveid, 0), NULL},
+                        {tag, lfs->workspace.orphaningcommit.ldir.pair}),
+                    NULL);
+        }
+        else {
+            state = lfs_dir_relocatingcommit(lfs, &lfs->workspace.orphaningcommit.pdir, lfs->workspace.orphaningcommit.ppair, LFS_MKATTRS(
+                        {LFS_MKTAG_IF(moveid != 0x3ff,
+                            LFS_TYPE_DELETE, moveid, 0), NULL},
+                        {tag, lfs->workspace.orphaningcommit.ldir.pair}),
+                    NULL);
+            return dir_orphaningcommit_relocated_done(lfs, state);
+
+        }
+    }
+    else {
+        // Move to next state
+        return dir_orphaningcommit_pred(lfs, state);
+    }
+
+}
+
+static int dir_orphaningcommit_relocated_done(lfs_t *lfs, int state) {
+
+    // TODO this if is a copy from above, only check if we actually entered above interstate_check
+    lfs_pair_fromle32(lfs->workspace.orphaningcommit.ldir.pair);
+    if (state < 0) {
+        return dir_orphaningcommit_done(lfs, state);
+    }
+
+    if (state == LFS_OK_RELOCATED) {
+        lfs->workspace.orphaningcommit.lpair[0] = lfs->workspace.orphaningcommit.ppair[0];
+        lfs->workspace.orphaningcommit.lpair[1] = lfs->workspace.orphaningcommit.ppair[1];
+        lfs->workspace.orphaningcommit.ldir = lfs->workspace.orphaningcommit.pdir;
+        lfs->workspace.orphaningcommit.orphans = true;
+        // TODO should we restart the process here?
+        return dir_orphaningcommit_relocated(lfs, state);
+    }
+
+    // TODO continue to next state
+    return dir_orphaningcommit_pred(lfs, state);
+}
+
+static int dir_orphaningcommit_pred(lfs_t *lfs, int state) {
+    // find pred
+    int err = lfs_fs_pred(lfs, lfs->workspace.orphaningcommit.lpair, &lfs->workspace.orphaningcommit.pdir);
+    if (err && err != LFS_ERR_NOENT) {
+        return dir_orphaningcommit_done(lfs, err);
+    }
+    LFS_ASSERT(!(lfs->workspace.orphaningcommit.hasparent && err == LFS_ERR_NOENT));
+
+    // if we can't find dir, it must be new
+    if (err != LFS_ERR_NOENT) {
+        if (lfs_gstate_hasorphans(&lfs->gstate)) {
+            // next step, clean up orphans
+            err = lfs_fs_preporphans(lfs, -lfs->workspace.orphaningcommit.hasparent);
+            if (err) {
+                return dir_orphaningcommit_done(lfs, err);
+            }
+        }
+
+        // fix pending move in this pair? this looks like an optimization
+        // but is in fact _required_ since relocating may outdate the move.
+        uint16_t moveid = 0x3ff;
+        if (lfs_gstate_hasmovehere(&lfs->gstate, lfs->workspace.orphaningcommit.pdir.pair)) {
+            moveid = lfs_tag_id(lfs->gstate.tag);
+            LFS_DEBUG("Fixing move while relocating "
+                    "{0x%"PRIx32", 0x%"PRIx32"} 0x%"PRIx16"\n",
+                    lfs->workspace.orphaningcommit.pdir.pair[0], lfs->workspace.orphaningcommit.pdir.pair[1], moveid);
+            lfs_fs_prepmove(lfs, 0x3ff, NULL);
+        }
+
+        // replace bad pair, either we clean up desync, or no desync occured
+        lfs->workspace.orphaningcommit.lpair[0] = lfs->workspace.orphaningcommit.pdir.pair[0];
+        lfs->workspace.orphaningcommit.lpair[1] = lfs->workspace.orphaningcommit.pdir.pair[1];
+        lfs_pair_tole32(lfs->workspace.orphaningcommit.ldir.pair);
+
+        if (lfs->workspace.orphaningcommit.orphaningcommit_done_cb != NULL) {
+            // Non blocking call
+            // TODO register to continue on nest state 
+            return lfs_dir_relocatingcommit(lfs, &lfs->workspace.orphaningcommit.pdir, lfs->workspace.orphaningcommit.lpair, LFS_MKATTRS(
+                        {LFS_MKTAG_IF(moveid != 0x3ff,
+                            LFS_TYPE_DELETE, moveid, 0), NULL},
+                        {LFS_MKTAG(LFS_TYPE_TAIL + lfs->workspace.orphaningcommit.pdir.split, 0x3ff, 8),
+                            lfs->workspace.orphaningcommit.ldir.pair}),
+                    NULL);
+        }
+        else {
+            // Blocking call
+            state = lfs_dir_relocatingcommit(lfs, &lfs->workspace.orphaningcommit.pdir, lfs->workspace.orphaningcommit.lpair, LFS_MKATTRS(
+                        {LFS_MKTAG_IF(moveid != 0x3ff,
+                            LFS_TYPE_DELETE, moveid, 0), NULL},
+                        {LFS_MKTAG(LFS_TYPE_TAIL + lfs->workspace.orphaningcommit.pdir.split, 0x3ff, 8),
+                            lfs->workspace.orphaningcommit.ldir.pair}),
+                    NULL);
+            // Call next state
+            return dir_orphaningcommit_replace_bad_pair(lfs, state);
+        }
+    }
+    else {
+        // Start loop over again
+        return dir_orphaningcommit_relocated(lfs, state);
+    }
+}
+
+static int dir_orphaningcommit_replace_bad_pair(lfs_t *lfs, int state) {
+    lfs_pair_fromle32(lfs->workspace.orphaningcommit.ldir.pair);
+    if (state < 0) {
+        return dir_orphaningcommit_done(lfs, state);
+    }
+
+    lfs->workspace.orphaningcommit.ldir =lfs->workspace.orphaningcommit. pdir;
+    // Start loop over again
+    return dir_orphaningcommit_relocated(lfs, state);
+}
+
+static int dir_orphaningcommit_done(lfs_t *lfs, int retval) {
+    if (retval == 0) {
+        // Command was successful
+        // calculate new retval
+        retval = lfs->workspace.orphaningcommit.orphans ? LFS_OK_ORPHANED : 0;
+    }
+
+    if (lfs->workspace.orphaningcommit.orphaningcommit_done_cb != NULL) {
+        // Call caller if this was a non blocking call
+        return lfs->workspace.orphaningcommit.orphaningcommit_done_cb(lfs, retval);
+    }
+    else {
+        return retval;
+    }
+}
+
 static int lfs_dir_orphaningcommit(lfs_t *lfs, lfs_mdir_t *dir,
         const struct lfs_mattr *attrs, int attrcount) {
     // check for any inline files that aren't RAM backed and
@@ -2294,186 +2605,24 @@ static int lfs_dir_orphaningcommit(lfs_t *lfs, lfs_mdir_t *dir,
                 f->ctz.size > lfs->cfg->cache_size) {
             int err = lfs_file_outline(lfs, f);
             if (err) {
-                return err;
+                return dir_orphaningcommit_done(lfs, err);
             }
 
+            // TODO this could be done asynchronus
             err = lfs_file_flush(lfs, f);
             if (err) {
-                return err;
+                return dir_orphaningcommit_done(lfs, err);
             }
         }
     }
+    lfs->workspace.orphaningcommit.dir = dir;
+    lfs->workspace.orphaningcommit.attrs = attrs;
+    lfs->workspace.orphaningcommit.attrcount = attrcount;
 
-    lfs_block_t lpair[2] = {dir->pair[0], dir->pair[1]};
-    lfs_mdir_t ldir = *dir;
-    lfs_mdir_t pdir;
-    int state = lfs_dir_relocatingcommit(lfs, &ldir, dir->pair,
-            attrs, attrcount, &pdir);
-    if (state < 0) {
-        return state;
-    }
-
-    // update if we're not in mlist, note we may have already been
-    // updated if we are in mlist
-    if (lfs_pair_cmp(dir->pair, lpair) == 0) {
-        *dir = ldir;
-    }
-
-    // commit was successful, but may require other changes in the
-    // filesystem, these would normally be tail recursive, but we have
-    // flattened them here avoid unbounded stack usage
-
-    // need to drop?
-    if (state == LFS_OK_DROPPED) {
-        // steal state
-        int err = lfs_dir_getgstate(lfs, dir, &lfs->gdelta);
-        if (err) {
-            return err;
-        }
-
-        // steal tail, note that this can't create a recursive drop
-        lpair[0] = pdir.pair[0];
-        lpair[1] = pdir.pair[1];
-        lfs_pair_tole32(dir->tail);
-        state = lfs_dir_relocatingcommit(lfs, &pdir, lpair, LFS_MKATTRS(
-                    {LFS_MKTAG(LFS_TYPE_TAIL + dir->split, 0x3ff, 8),
-                        dir->tail}),
-                NULL);
-        lfs_pair_fromle32(dir->tail);
-        if (state < 0) {
-            return state;
-        }
-
-        ldir = pdir;
-    }
-
-    // need to relocate?
-    bool orphans = false;
-    while (state == LFS_OK_RELOCATED) {
-        LFS_DEBUG("Relocating {0x%"PRIx32", 0x%"PRIx32"} "
-                    "-> {0x%"PRIx32", 0x%"PRIx32"}",
-                lpair[0], lpair[1], ldir.pair[0], ldir.pair[1]);
-        state = 0;
-
-        // update internal root
-        if (lfs_pair_cmp(lpair, lfs->root) == 0) {
-            lfs->root[0] = ldir.pair[0];
-            lfs->root[1] = ldir.pair[1];
-        }
-
-        // update internally tracked dirs
-        for (struct lfs_mlist *d = lfs->mlist; d; d = d->next) {
-            if (lfs_pair_cmp(lpair, d->m.pair) == 0) {
-                d->m.pair[0] = ldir.pair[0];
-                d->m.pair[1] = ldir.pair[1];
-            }
-
-            if (d->type == LFS_TYPE_DIR &&
-                    lfs_pair_cmp(lpair, ((lfs_dir_t*)d)->head) == 0) {
-                ((lfs_dir_t*)d)->head[0] = ldir.pair[0];
-                ((lfs_dir_t*)d)->head[1] = ldir.pair[1];
-            }
-        }
-
-        // find parent
-        lfs_stag_t tag = lfs_fs_parent(lfs, lpair, &pdir);
-        if (tag < 0 && tag != LFS_ERR_NOENT) {
-            return tag;
-        }
-
-        bool hasparent = (tag != LFS_ERR_NOENT);
-        if (tag != LFS_ERR_NOENT) {
-            // note that if we have a parent, we must have a pred, so this will
-            // always create an orphan
-            int err = lfs_fs_preporphans(lfs, +1);
-            if (err) {
-                return err;
-            }
-
-            // fix pending move in this pair? this looks like an optimization but
-            // is in fact _required_ since relocating may outdate the move.
-            uint16_t moveid = 0x3ff;
-            if (lfs_gstate_hasmovehere(&lfs->gstate, pdir.pair)) {
-                moveid = lfs_tag_id(lfs->gstate.tag);
-                LFS_DEBUG("Fixing move while relocating "
-                        "{0x%"PRIx32", 0x%"PRIx32"} 0x%"PRIx16"\n",
-                        pdir.pair[0], pdir.pair[1], moveid);
-                lfs_fs_prepmove(lfs, 0x3ff, NULL);
-                if (moveid < lfs_tag_id(tag)) {
-                    tag -= LFS_MKTAG(0, 1, 0);
-                }
-            }
-
-            lfs_block_t ppair[2] = {pdir.pair[0], pdir.pair[1]};
-            lfs_pair_tole32(ldir.pair);
-            state = lfs_dir_relocatingcommit(lfs, &pdir, ppair, LFS_MKATTRS(
-                        {LFS_MKTAG_IF(moveid != 0x3ff,
-                            LFS_TYPE_DELETE, moveid, 0), NULL},
-                        {tag, ldir.pair}),
-                    NULL);
-            lfs_pair_fromle32(ldir.pair);
-            if (state < 0) {
-                return state;
-            }
-
-            if (state == LFS_OK_RELOCATED) {
-                lpair[0] = ppair[0];
-                lpair[1] = ppair[1];
-                ldir = pdir;
-                orphans = true;
-                continue;
-            }
-        }
-
-        // find pred
-        int err = lfs_fs_pred(lfs, lpair, &pdir);
-        if (err && err != LFS_ERR_NOENT) {
-            return err;
-        }
-        LFS_ASSERT(!(hasparent && err == LFS_ERR_NOENT));
-
-        // if we can't find dir, it must be new
-        if (err != LFS_ERR_NOENT) {
-            if (lfs_gstate_hasorphans(&lfs->gstate)) {
-                // next step, clean up orphans
-                err = lfs_fs_preporphans(lfs, -hasparent);
-                if (err) {
-                    return err;
-                }
-            }
-
-            // fix pending move in this pair? this looks like an optimization
-            // but is in fact _required_ since relocating may outdate the move.
-            uint16_t moveid = 0x3ff;
-            if (lfs_gstate_hasmovehere(&lfs->gstate, pdir.pair)) {
-                moveid = lfs_tag_id(lfs->gstate.tag);
-                LFS_DEBUG("Fixing move while relocating "
-                        "{0x%"PRIx32", 0x%"PRIx32"} 0x%"PRIx16"\n",
-                        pdir.pair[0], pdir.pair[1], moveid);
-                lfs_fs_prepmove(lfs, 0x3ff, NULL);
-            }
-
-            // replace bad pair, either we clean up desync, or no desync occured
-            lpair[0] = pdir.pair[0];
-            lpair[1] = pdir.pair[1];
-            lfs_pair_tole32(ldir.pair);
-            state = lfs_dir_relocatingcommit(lfs, &pdir, lpair, LFS_MKATTRS(
-                        {LFS_MKTAG_IF(moveid != 0x3ff,
-                            LFS_TYPE_DELETE, moveid, 0), NULL},
-                        {LFS_MKTAG(LFS_TYPE_TAIL + pdir.split, 0x3ff, 8),
-                            ldir.pair}),
-                    NULL);
-            lfs_pair_fromle32(ldir.pair);
-            if (state < 0) {
-                return state;
-            }
-
-            ldir = pdir;
-        }
-    }
-
-    return orphans ? LFS_OK_ORPHANED : 0;
+    // Continue to next state
+    return dir_orphaningcommit_commit(lfs);
 }
+// ********************* DIR_ORPHANINGCOMMIT *********************
 #endif
 
 #ifndef LFS_READONLY
@@ -5806,6 +5955,7 @@ int lfs_format(lfs_t *lfs, const struct lfs_config *cfg) {
     bd_flush_register_callback(lfs, NULL);
     dir_commit_register_callback(lfs, NULL);
     dir_compact_register_callback(lfs, NULL);
+    dir_orphaningcommit_register_callback(lfs, NULL);
 
     err = lfs_rawformat(lfs, cfg);
 

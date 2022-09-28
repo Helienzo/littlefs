@@ -441,6 +441,19 @@ struct lfs {
         // Common for all steps
         struct lfs *lfs;
         lfs_file_t *file;
+        // dir_orphaningcommit
+        struct dir_orphaningcommit {
+            lfs_ssize_t (*orphaningcommit_done_cb)(struct lfs *lfs, lfs_ssize_t retval);
+            lfs_mdir_t *dir;
+            const void *attrs;
+            int attrcount;
+            lfs_block_t lpair[2];
+            lfs_mdir_t ldir;
+            lfs_mdir_t pdir;
+            lfs_block_t ppair[2];
+            bool orphans;
+            bool hasparent;
+        } orphaningcommit;
         // dir_compact
         struct lfs_dir_compact{
             lfs_ssize_t (*dir_compact_done_cb)(struct lfs *lfs, lfs_ssize_t retval);

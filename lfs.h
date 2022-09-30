@@ -395,6 +395,11 @@ struct lfs_com {
     lfs_off_t end;
 } lfs_commit;
 
+// operations on attributes in attribute lists
+typedef struct lfs_mattr {
+    uint32_t tag;
+    const void *buffer;
+} lfs_mattr;
 
 // The littlefs filesystem type
 struct lfs {
@@ -441,6 +446,15 @@ struct lfs {
         // Common for all steps
         struct lfs *lfs;
         lfs_file_t *file;
+        // dir_relocatingcommit
+        struct dir_relocatingcommit{
+            lfs_ssize_t (*relocatingcommit_done_cb)(struct lfs *lfs, lfs_ssize_t retval);
+            lfs_mdir_t *dir;
+            const lfs_block_t *pair[2];
+            const lfs_mattr *attrs;
+            int attrcount;
+            int state;
+        } relocatingcommit;
         // dir_orphaningcommit
         struct dir_orphaningcommit {
             lfs_ssize_t (*orphaningcommit_done_cb)(struct lfs *lfs, lfs_ssize_t retval);

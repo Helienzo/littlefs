@@ -410,12 +410,6 @@ static inline lfs_size_t lfs_tag_dsize(lfs_tag_t tag) {
     return sizeof(tag) + lfs_tag_size(tag + lfs_tag_isdelete(tag));
 }
 
-// operations on attributes in attribute lists
-struct lfs_mattr {
-    lfs_tag_t tag;
-    const void *buffer;
-};
-
 struct lfs_diskoff {
     lfs_block_t block;
     lfs_off_t off;
@@ -2113,128 +2107,51 @@ static int lfs_dir_splittingcompact(lfs_t *lfs, lfs_mdir_t *dir,
 #endif
 
 #ifndef LFS_READONLY
-static int lfs_dir_relocatingcommit(lfs_t *lfs, lfs_mdir_t *dir,
-        const lfs_block_t pair[2],
-        const struct lfs_mattr *attrs, int attrcount,
-        lfs_mdir_t *pdir) {
-    int state = 0;
+// ********************* DIR_RELOCATINGCOMMIT *********************
+static lfs_ssize_t dir_relocatingcommit_register_callback(lfs_t *lfs, lfs_ssize_t (*cb)(struct lfs *lfs, lfs_ssize_t retval));
+static int dir_relocatingcommit_splitcom(lfs_t *lfs);
+static int dir_relocatingcommit_splitcom_done(lfs_t *lfs, int state);
+static int dir_relocatingcommit_fixmlist(lfs_t *lfs);
+static int dir_relocatingcommit_done(lfs_t *lfs, int retval);
 
-    // calculate changes to the directory
-    bool hasdelete = false;
-    for (int i = 0; i < attrcount; i++) {
-        if (lfs_tag_type3(attrs[i].tag) == LFS_TYPE_CREATE) {
-            dir->count += 1;
-        } else if (lfs_tag_type3(attrs[i].tag) == LFS_TYPE_DELETE) {
-            LFS_ASSERT(dir->count > 0);
-            dir->count -= 1;
-            hasdelete = true;
-        } else if (lfs_tag_type1(attrs[i].tag) == LFS_TYPE_TAIL) {
-            dir->tail[0] = ((lfs_block_t*)attrs[i].buffer)[0];
-            dir->tail[1] = ((lfs_block_t*)attrs[i].buffer)[1];
-            dir->split = (lfs_tag_chunk(attrs[i].tag) & 1);
-            lfs_pair_fromle32(dir->tail);
-        }
+static lfs_ssize_t dir_relocatingcommit_register_callback(lfs_t *lfs, lfs_ssize_t (*cb)(struct lfs *lfs, lfs_ssize_t retval)) {
+    if (cb != NULL) {
+        lfs->workspace.relocatingcommit.relocatingcommit_done_cb = cb;
+        return LFS_ERR_OK;
     }
-
-    // should we actually drop the directory block?
-    if (hasdelete && dir->count == 0) {
-        LFS_ASSERT(pdir);
-        int err = lfs_fs_pred(lfs, dir->pair, pdir);
-        if (err && err != LFS_ERR_NOENT) {
-            return err;
-        }
-
-        if (err != LFS_ERR_NOENT && pdir->split) {
-            state = LFS_OK_DROPPED;
-            goto fixmlist;
-        }
+    else {
+        lfs->workspace.relocatingcommit.relocatingcommit_done_cb = NULL;
+        return LFS_ERR_INVAL;
     }
+}
 
-    if (dir->erased) {
-        // try to commit
-        struct lfs_commit commit = {
-            .block = dir->pair[0],
-            .off = dir->off,
-            .ptag = dir->etag,
-            .crc = 0xffffffff,
-
-            .begin = dir->off,
-            .end = (lfs->cfg->metadata_max ?
-                lfs->cfg->metadata_max : lfs->cfg->block_size) - 8,
-        };
-
-        // traverse attrs that need to be written out
-        lfs_pair_tole32(dir->tail);
-        int err = lfs_dir_traverse(lfs,
-                dir, dir->off, dir->etag, attrs, attrcount,
-                0, 0, 0, 0, 0,
-                lfs_dir_commit_commit, &(struct lfs_dir_commit_commit){
-                    lfs, &commit});
-        lfs_pair_fromle32(dir->tail);
-        if (err) {
-            if (err == LFS_ERR_NOSPC || err == LFS_ERR_CORRUPT) {
-                goto compact;
-            }
-            return err;
-        }
-
-        // commit any global diffs if we have any
-        lfs_gstate_t delta = {0};
-        lfs_gstate_xor(&delta, &lfs->gstate);
-        lfs_gstate_xor(&delta, &lfs->gdisk);
-        lfs_gstate_xor(&delta, &lfs->gdelta);
-        delta.tag &= ~LFS_MKTAG(0, 0, 0x3ff);
-        if (!lfs_gstate_iszero(&delta)) {
-            err = lfs_dir_getgstate(lfs, dir, &delta);
-            if (err) {
-                return err;
-            }
-
-            lfs_gstate_tole32(&delta);
-            err = lfs_dir_commitattr(lfs, &commit,
-                    LFS_MKTAG(LFS_TYPE_MOVESTATE, 0x3ff,
-                        sizeof(delta)), &delta);
-            if (err) {
-                if (err == LFS_ERR_NOSPC || err == LFS_ERR_CORRUPT) {
-                    goto compact;
-                }
-                return err;
-            }
-        }
-
-        // finalize commit with the crc
-        err = lfs_dir_commitcrc(lfs, &commit);
-        if (err) {
-            if (err == LFS_ERR_NOSPC || err == LFS_ERR_CORRUPT) {
-                goto compact;
-            }
-            return err;
-        }
-
-        // successful commit, update dir
-        LFS_ASSERT(commit.off % lfs->cfg->prog_size == 0);
-        dir->off = commit.off;
-        dir->etag = commit.ptag;
-        // and update gstate
-        lfs->gdisk = lfs->gstate;
-        lfs->gdelta = (lfs_gstate_t){0};
-
-        goto fixmlist;
-    }
-
-compact:
+static int dir_relocatingcommit_splitcom(lfs_t *lfs) {
     // fall back to compaction
     lfs_cache_drop(lfs, &lfs->pcache);
 
-    state = lfs_dir_splittingcompact(lfs, dir, attrs, attrcount,
-            dir, 0, dir->count);
-    if (state < 0) {
-        return state;
+    if (lfs->workspace.relocatingcommit.relocatingcommit_done_cb != NULL) {
+        // TODO register to continue on nest state
+        return lfs_dir_splittingcompact(lfs, lfs->workspace.relocatingcommit.dir, lfs->workspace.relocatingcommit.attrs, lfs->workspace.relocatingcommit.attrcount,
+            lfs->workspace.relocatingcommit.dir, 0, lfs->workspace.relocatingcommit.dir->count);
     }
+    else {
+        // Call the blocking function
+        int state = lfs_dir_splittingcompact(lfs, lfs->workspace.relocatingcommit.dir, lfs->workspace.relocatingcommit.attrs, lfs->workspace.relocatingcommit.attrcount,
+                lfs->workspace.relocatingcommit.dir, 0, lfs->workspace.relocatingcommit.dir->count);
+        // Call next state
+        return dir_relocatingcommit_splitcom_done(lfs, state);
+    }
+}
 
-    goto fixmlist;
+static int dir_relocatingcommit_splitcom_done(lfs_t *lfs, int state) {
+    lfs->workspace.relocatingcommit.state = state;
+    if (state < 0) {
+        return dir_relocatingcommit_done(lfs, state);
+    }
+    return dir_relocatingcommit_fixmlist(lfs);
+}
 
-fixmlist:;
+static int dir_relocatingcommit_fixmlist(lfs_t *lfs) {
     // this complicated bit of logic is for fixing up any active
     // metadata-pairs that we may have affected
     //
@@ -2242,24 +2159,24 @@ fixmlist:;
     // lfs_dir_commit could also be in this list, and even then
     // we need to copy the pair so they don't get clobbered if we refetch
     // our mdir.
-    lfs_block_t oldpair[2] = {pair[0], pair[1]};
+    lfs_block_t oldpair[2] = {*lfs->workspace.relocatingcommit.pair[0], *lfs->workspace.relocatingcommit.pair[1]};
     for (struct lfs_mlist *d = lfs->mlist; d; d = d->next) {
         if (lfs_pair_cmp(d->m.pair, oldpair) == 0) {
-            d->m = *dir;
-            if (d->m.pair != pair) {
-                for (int i = 0; i < attrcount; i++) {
-                    if (lfs_tag_type3(attrs[i].tag) == LFS_TYPE_DELETE &&
-                            d->id == lfs_tag_id(attrs[i].tag)) {
+            d->m = *lfs->workspace.relocatingcommit.dir;
+            if (d->m.pair != *lfs->workspace.relocatingcommit.pair) {
+                for (int i = 0; i < lfs->workspace.relocatingcommit.attrcount; i++) {
+                    if (lfs_tag_type3(lfs->workspace.relocatingcommit.attrs[i].tag) == LFS_TYPE_DELETE &&
+                            d->id == lfs_tag_id(lfs->workspace.relocatingcommit.attrs[i].tag)) {
                         d->m.pair[0] = LFS_BLOCK_NULL;
                         d->m.pair[1] = LFS_BLOCK_NULL;
-                    } else if (lfs_tag_type3(attrs[i].tag) == LFS_TYPE_DELETE &&
-                            d->id > lfs_tag_id(attrs[i].tag)) {
+                    } else if (lfs_tag_type3(lfs->workspace.relocatingcommit.attrs[i].tag) == LFS_TYPE_DELETE &&
+                            d->id > lfs_tag_id(lfs->workspace.relocatingcommit.attrs[i].tag)) {
                         d->id -= 1;
                         if (d->type == LFS_TYPE_DIR) {
                             ((lfs_dir_t*)d)->pos -= 1;
                         }
-                    } else if (lfs_tag_type3(attrs[i].tag) == LFS_TYPE_CREATE &&
-                            d->id >= lfs_tag_id(attrs[i].tag)) {
+                    } else if (lfs_tag_type3(lfs->workspace.relocatingcommit.attrs[i].tag) == LFS_TYPE_CREATE &&
+                            d->id >= lfs_tag_id(lfs->workspace.relocatingcommit.attrs[i].tag)) {
                         d->id += 1;
                         if (d->type == LFS_TYPE_DIR) {
                             ((lfs_dir_t*)d)->pos += 1;
@@ -2273,14 +2190,144 @@ fixmlist:;
                 d->id -= d->m.count;
                 int err = lfs_dir_fetch(lfs, &d->m, d->m.tail);
                 if (err) {
-                    return err;
+                    return dir_relocatingcommit_done(lfs, err);
                 }
             }
         }
     }
 
-    return state;
+    // Command successful
+    return dir_relocatingcommit_done(lfs, lfs->workspace.relocatingcommit.state);
 }
+
+static int dir_relocatingcommit_done(lfs_t *lfs, int retval) {
+    // Call done cb
+    if (lfs->workspace.relocatingcommit.relocatingcommit_done_cb != NULL) {
+        return lfs->workspace.relocatingcommit.relocatingcommit_done_cb(lfs, retval);
+    }
+    else {
+        return retval;
+    }
+}
+
+static int lfs_dir_relocatingcommit(lfs_t *lfs, lfs_mdir_t *dir,
+        const lfs_block_t pair[2],
+        const struct lfs_mattr *attrs, int attrcount,
+        lfs_mdir_t *pdir) {
+    // Store context
+    lfs->workspace.relocatingcommit.dir = dir;
+    lfs->workspace.relocatingcommit.pair[0] = &pair[0];
+    lfs->workspace.relocatingcommit.pair[1] = &pair[1];
+    lfs->workspace.relocatingcommit.attrs = attrs;
+    lfs->workspace.relocatingcommit.attrcount = attrcount;
+    lfs->workspace.relocatingcommit.state = 0;
+
+    // calculate changes to the directory
+    bool hasdelete = false;
+    for (int i = 0; i < lfs->workspace.relocatingcommit.attrcount; i++) {
+        if (lfs_tag_type3(lfs->workspace.relocatingcommit.attrs[i].tag) == LFS_TYPE_CREATE) {
+            lfs->workspace.relocatingcommit.dir->count += 1;
+        } else if (lfs_tag_type3(lfs->workspace.relocatingcommit.attrs[i].tag) == LFS_TYPE_DELETE) {
+            LFS_ASSERT(lfs->workspace.relocatingcommit.dir->count > 0);
+            lfs->workspace.relocatingcommit.dir->count -= 1;
+            hasdelete = true;
+        } else if (lfs_tag_type1(lfs->workspace.relocatingcommit.attrs[i].tag) == LFS_TYPE_TAIL) {
+            lfs->workspace.relocatingcommit.dir->tail[0] = ((lfs_block_t*)lfs->workspace.relocatingcommit.attrs[i].buffer)[0];
+            lfs->workspace.relocatingcommit.dir->tail[1] = ((lfs_block_t*)lfs->workspace.relocatingcommit.attrs[i].buffer)[1];
+            lfs->workspace.relocatingcommit.dir->split = (lfs_tag_chunk(lfs->workspace.relocatingcommit.attrs[i].tag) & 1);
+            lfs_pair_fromle32(lfs->workspace.relocatingcommit.dir->tail);
+        }
+    }
+
+    // should we actually drop the directory block?
+    if (hasdelete && lfs->workspace.relocatingcommit.dir->count == 0) {
+        LFS_ASSERT(pdir);
+        int err = lfs_fs_pred(lfs, lfs->workspace.relocatingcommit.dir->pair, pdir);
+        if (err && err != LFS_ERR_NOENT) {
+            return dir_relocatingcommit_done(lfs, err);
+        }
+
+        if (err != LFS_ERR_NOENT && pdir->split) {
+            lfs->workspace.relocatingcommit.state = LFS_OK_DROPPED;
+            return dir_relocatingcommit_fixmlist(lfs);
+        }
+    }
+
+    if (lfs->workspace.relocatingcommit.dir->erased) {
+        // try to commit
+        struct lfs_commit commit = {
+            .block = lfs->workspace.relocatingcommit.dir->pair[0],
+            .off = lfs->workspace.relocatingcommit.dir->off,
+            .ptag = lfs->workspace.relocatingcommit.dir->etag,
+            .crc = 0xffffffff,
+
+            .begin = lfs->workspace.relocatingcommit.dir->off,
+            .end = (lfs->cfg->metadata_max ?
+                lfs->cfg->metadata_max : lfs->cfg->block_size) - 8,
+        };
+
+        // traverse attrs that need to be written out
+        lfs_pair_tole32(lfs->workspace.relocatingcommit.dir->tail);
+        int err = lfs_dir_traverse(lfs,
+                lfs->workspace.relocatingcommit.dir, lfs->workspace.relocatingcommit.dir->off, lfs->workspace.relocatingcommit.dir->etag, lfs->workspace.relocatingcommit.attrs, lfs->workspace.relocatingcommit.attrcount,
+                0, 0, 0, 0, 0,
+                lfs_dir_commit_commit, &(struct lfs_dir_commit_commit){
+                    lfs, &commit});
+        lfs_pair_fromle32(lfs->workspace.relocatingcommit.dir->tail);
+        if (err) {
+            if (err == LFS_ERR_NOSPC || err == LFS_ERR_CORRUPT) {
+                return dir_relocatingcommit_splitcom(lfs);
+            }
+            return dir_relocatingcommit_done(lfs, err);
+        }
+
+        // commit any global diffs if we have any
+        lfs_gstate_t delta = {0};
+        lfs_gstate_xor(&delta, &lfs->gstate);
+        lfs_gstate_xor(&delta, &lfs->gdisk);
+        lfs_gstate_xor(&delta, &lfs->gdelta);
+        delta.tag &= ~LFS_MKTAG(0, 0, 0x3ff);
+        if (!lfs_gstate_iszero(&delta)) {
+            err = lfs_dir_getgstate(lfs, lfs->workspace.relocatingcommit.dir, &delta);
+            if (err) {
+                return dir_relocatingcommit_done(lfs, err);
+            }
+
+            lfs_gstate_tole32(&delta);
+            err = lfs_dir_commitattr(lfs, &commit,
+                    LFS_MKTAG(LFS_TYPE_MOVESTATE, 0x3ff,
+                        sizeof(delta)), &delta);
+            if (err) {
+                if (err == LFS_ERR_NOSPC || err == LFS_ERR_CORRUPT) {
+                    return dir_relocatingcommit_splitcom(lfs);
+                }
+                return dir_relocatingcommit_done(lfs, err);
+            }
+        }
+
+        // finalize commit with the crc
+        err = lfs_dir_commitcrc(lfs, &commit);
+        if (err) {
+            if (err == LFS_ERR_NOSPC || err == LFS_ERR_CORRUPT) {
+                return dir_relocatingcommit_splitcom(lfs);
+            }
+            return dir_relocatingcommit_done(lfs, err);
+        }
+
+        // successful commit, update dir
+        LFS_ASSERT(commit.off % lfs->cfg->prog_size == 0);
+        lfs->workspace.relocatingcommit.dir->off = commit.off;
+        lfs->workspace.relocatingcommit.dir->etag = commit.ptag;
+        // and update gstate
+        lfs->gdisk = lfs->gstate;
+        lfs->gdelta = (lfs_gstate_t){0};
+
+        return dir_relocatingcommit_fixmlist(lfs);
+    }
+
+    return dir_relocatingcommit_splitcom(lfs);
+}
+// ********************* DIR_RELOCATINGCOMMIT *********************
 #endif
 
 #ifndef LFS_READONLY
@@ -5956,6 +6003,7 @@ int lfs_format(lfs_t *lfs, const struct lfs_config *cfg) {
     dir_commit_register_callback(lfs, NULL);
     dir_compact_register_callback(lfs, NULL);
     dir_orphaningcommit_register_callback(lfs, NULL);
+    dir_relocatingcommit_register_callback(lfs, NULL);
 
     err = lfs_rawformat(lfs, cfg);
 

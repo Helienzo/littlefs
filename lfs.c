@@ -536,6 +536,7 @@ static int lfs_dir_commit(lfs_t *lfs, lfs_mdir_t *dir,
 static int lfs_dir_compact(lfs_t *lfs,
         lfs_mdir_t *dir, const struct lfs_mattr *attrs, int attrcount,
         lfs_mdir_t *source, uint16_t begin, uint16_t end);
+static int dir_compact_register_callback(lfs_t *lfs, lfs_ssize_t (*cb)(struct lfs *lfs, lfs_ssize_t retval));
 static lfs_ssize_t lfs_file_flushedwrite(lfs_t *lfs, lfs_file_t *file,
         const void *buffer, lfs_size_t size);
 static lfs_ssize_t lfs_file_rawwrite(lfs_t *lfs, lfs_file_t *file,
@@ -1707,38 +1708,89 @@ static int lfs_dir_drop(lfs_t *lfs, lfs_mdir_t *dir, lfs_mdir_t *tail) {
 #endif
 
 #ifndef LFS_READONLY
+// ********************* DIR_SPLIT *********************
+static int dir_split_register_callback(lfs_t *lfs, lfs_ssize_t (*cb)(struct lfs *lfs, lfs_ssize_t retval));
+static int lfs_dir_split_done(lfs_t *lfs, int retval);
+static int lfs_dir_split_compact_done(lfs_t *lfs, int retval);
+
+static int dir_split_register_callback(lfs_t *lfs, lfs_ssize_t (*cb)(struct lfs *lfs, lfs_ssize_t retval)) {
+    if (cb != NULL) {
+        lfs->workspace.dirsplit.dir_split_done_cb = cb;
+        return LFS_ERR_OK;
+    } else {
+        lfs->workspace.dirsplit.dir_split_done_cb = NULL;
+        return LFS_ERR_INVAL;
+    }
+}
+
+static int lfs_dir_split_compact_done(lfs_t *lfs, int retval) {
+    if (retval < 0) {
+        // Propagate error
+        return lfs_dir_split_done(lfs, retval);
+    }
+
+    lfs->workspace.dirsplit.dir->tail[0] = lfs->workspace.dirsplit.tail.pair[0];
+    lfs->workspace.dirsplit.dir->tail[1] = lfs->workspace.dirsplit.tail.pair[1];
+    lfs->workspace.dirsplit.dir->split = true;
+
+    // update root if needed
+    if (lfs_pair_cmp(lfs->workspace.dirsplit.dir->pair, lfs->root) == 0 && lfs->workspace.dirsplit.split == 0) {
+        lfs->root[0] = lfs->workspace.dirsplit.tail.pair[0];
+        lfs->root[1] = lfs->workspace.dirsplit.tail.pair[1];
+    }
+
+    // Command done
+    return lfs_dir_split_done(lfs, 0);
+}
+
+static int lfs_dir_split_done(lfs_t *lfs, int retval) {
+    // Reset the compact callback
+    dir_compact_register_callback(lfs, NULL);
+
+    // Call done cb
+    if (lfs->workspace.dirsplit.dir_split_done_cb != NULL) {
+        return lfs->workspace.dirsplit.dir_split_done_cb (lfs, retval);
+    }
+    else {
+        return retval;
+    }
+}
+
 static int lfs_dir_split(lfs_t *lfs,
         lfs_mdir_t *dir, const struct lfs_mattr *attrs, int attrcount,
         lfs_mdir_t *source, uint16_t split, uint16_t end) {
+
     // create tail metadata pair
-    lfs_mdir_t tail;
-    int err = lfs_dir_alloc(lfs, &tail);
+    int err = lfs_dir_alloc(lfs, &lfs->workspace.dirsplit.tail);
     if (err) {
-        return err;
+        return lfs_dir_split_done(lfs, err);
     }
 
-    tail.split = dir->split;
-    tail.tail[0] = dir->tail[0];
-    tail.tail[1] = dir->tail[1];
+    // Store context
+    lfs->workspace.dirsplit.dir   = dir;
+    lfs->workspace.dirsplit.split = split;
 
-    // note we don't care about LFS_OK_RELOCATED
-    int res = lfs_dir_compact(lfs, &tail, attrs, attrcount, source, split, end);
-    if (res < 0) {
-        return res;
+    lfs->workspace.dirsplit.tail.split = dir->split;
+    lfs->workspace.dirsplit.tail.tail[0] = dir->tail[0];
+    lfs->workspace.dirsplit.tail.tail[1] = dir->tail[1];
+
+    if (lfs->workspace.dirsplit.dir_split_done_cb != NULL) {
+        // Register callback
+        dir_compact_register_callback(lfs, lfs_dir_split_compact_done);
+        // Call non blocking function
+        // note we don't care about LFS_OK_RELOCATED
+        return lfs_dir_compact(lfs, &lfs->workspace.dirsplit.tail, attrs, attrcount, source, split, end);
     }
-
-    dir->tail[0] = tail.pair[0];
-    dir->tail[1] = tail.pair[1];
-    dir->split = true;
-
-    // update root if needed
-    if (lfs_pair_cmp(dir->pair, lfs->root) == 0 && split == 0) {
-        lfs->root[0] = tail.pair[0];
-        lfs->root[1] = tail.pair[1];
+    else
+    {
+        // Blocking call
+        // note we don't care about LFS_OK_RELOCATED
+        int res = lfs_dir_compact(lfs, &lfs->workspace.dirsplit.tail, attrs, attrcount, source, split, end);
+        // Call next state
+        return lfs_dir_split_compact_done(lfs, res);
     }
-
-    return 0;
 }
+// ********************* DIR_SPLIT *********************
 #endif
 
 #ifndef LFS_READONLY
@@ -1780,7 +1832,6 @@ static bool lfs_dir_needsrelocation(lfs_t *lfs, lfs_mdir_t *dir) {
 
 #ifndef LFS_READONLY
 // ********************* DIR_COMPACT *********************
-static int dir_compact_register_callback(lfs_t *lfs, lfs_ssize_t (*cb)(struct lfs *lfs, lfs_ssize_t retval));
 static int dir_compact_relocate(lfs_t *lfs);
 static int dir_compact_commit_start(lfs_t *lfs);
 static int dir_compact_erase_done(const struct lfs_config *c, int retval);
@@ -2073,15 +2124,14 @@ static int dir_splittingcompact_start(lfs_t *lfs) {
     }
 
     // split into two metadata pairs and continue
-#ifdef NONBLOCK
     if (lfs->workspace.splittingcompact.splittingcompact_done_cb != NULL) {
-        // TODO register Register callback dir_splittingcompact_split_pair_done
+        // Register callback
+        dir_split_register_callback(lfs, dir_splittingcompact_split_pair_done);
         // Call non blocking function
         return lfs_dir_split(lfs, lfs->workspace.splittingcompact.dir, lfs->workspace.splittingcompact.attrs, lfs->workspace.splittingcompact.attrcount,
             lfs->workspace.splittingcompact.source, lfs->workspace.splittingcompact.split, lfs->workspace.splittingcompact.end);
     }
     else
-#endif
     {
         // Blocking call
         int err = lfs_dir_split(lfs, lfs->workspace.splittingcompact.dir, lfs->workspace.splittingcompact.attrs, lfs->workspace.splittingcompact.attrcount,
@@ -2092,6 +2142,10 @@ static int dir_splittingcompact_start(lfs_t *lfs) {
 }
 
 static int dir_splittingcompact_split_pair_done(lfs_t *lfs, int retval) {
+
+    // Reset callback
+    dir_split_register_callback(lfs, NULL);
+
     if (retval && retval != LFS_ERR_NOSPC) {
         return dir_splittingcompact_done(lfs, retval);
     }
@@ -2128,15 +2182,14 @@ static int dir_splittingcompact_relocation(lfs_t *lfs) {
         if ((lfs_size_t)size < lfs->cfg->block_count/2) {
             LFS_DEBUG("Expanding superblock at rev %"PRIu32, lfs->workspace.splittingcompact.dir->rev);
             // split into two metadata pairs and continue
-#ifdef NONBLOCK
             if (lfs->workspace.splittingcompact.splittingcompact_done_cb != NULL) {
-                // TODO Register callback dir_splittingcompact_reloc_split_done
+                // Register callback
+                dir_split_register_callback(lfs, dir_splittingcompact_reloc_split_done);
                 // Call non blocking function
                 return lfs_dir_split(lfs, lfs->workspace.splittingcompact.dir, lfs->workspace.splittingcompact.attrs, lfs->workspace.splittingcompact.attrcount,
                         lfs->workspace.splittingcompact.source, lfs->workspace.splittingcompact.begin, lfs->workspace.splittingcompact.end);
             }
             else
-#endif
             {
                 // Blocking call
                 int err = lfs_dir_split(lfs, lfs->workspace.splittingcompact.dir, lfs->workspace.splittingcompact.attrs, lfs->workspace.splittingcompact.attrcount,
@@ -2150,6 +2203,9 @@ static int dir_splittingcompact_relocation(lfs_t *lfs) {
 }
 
 static int dir_splittingcompact_reloc_split_done(lfs_t *lfs, int retval) {
+    // Reset callback
+    dir_split_register_callback(lfs, NULL);
+
     if (retval && retval != LFS_ERR_NOSPC) {
         return dir_splittingcompact_done(lfs, retval);
     }
@@ -6165,6 +6221,7 @@ int lfs_format(lfs_t *lfs, const struct lfs_config *cfg) {
     dir_orphaningcommit_register_callback(lfs, NULL);
     dir_relocatingcommit_register_callback(lfs, NULL);
     dir_splittingcompact_register_callback(lfs, NULL);
+    dir_split_register_callback(lfs, NULL);
 
     err = lfs_rawformat(lfs, cfg);
 

@@ -446,6 +446,13 @@ struct lfs {
         // Common for all steps
         struct lfs *lfs;
         lfs_file_t *file;
+        // dir_split
+        struct lfs_dir_split{
+            lfs_ssize_t (*dir_split_done_cb)(struct lfs *lfs, lfs_ssize_t retval);
+            lfs_mdir_t *dir;
+            uint16_t split;
+            lfs_mdir_t tail;
+        } dirsplit;
         // dir_splittingcompact
         struct dir_splittingcompact {
             lfs_ssize_t (*splittingcompact_done_cb)(struct lfs *lfs, lfs_ssize_t retval);

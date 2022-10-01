@@ -1823,111 +1823,109 @@ static int dir_compact_commit_start(lfs_t *lfs) {
 }
 
 static int dir_compact_erase_done(const struct lfs_config *c, int retval) {
-    // TODO is it wise having a stack variable here?
-    lfs_t *lfs = *(c->current_lfs);
-
+    LFS_TRACE_SUPER("ERASE DONE %i", retval);
     // Make sure to clear callback
-    lfs->lfs_bd_callbacks.erase_cb = NULL;
+    (*c->current_lfs)->lfs_bd_callbacks.erase_cb = NULL;
 
     if (retval) {
         if (retval == LFS_ERR_CORRUPT) {
-            return dir_compact_relocate(lfs);
+            return dir_compact_relocate((*c->current_lfs));
         }
-        return dir_compact_done(lfs, retval);
+        return dir_compact_done((*c->current_lfs), retval);
     }
 
     // write out header
-    lfs->workspace.dir_compact.dir->rev = lfs_tole32(lfs->workspace.dir_compact.dir->rev);
-    int err = lfs_dir_commitprog(lfs, &lfs->workspace.dir_compact.commit,
-            &lfs->workspace.dir_compact.dir->rev, sizeof(lfs->workspace.dir_compact.dir->rev));
-    lfs->workspace.dir_compact.dir->rev = lfs_fromle32(lfs->workspace.dir_compact.dir->rev);
+    (*c->current_lfs)->workspace.dir_compact.dir->rev = lfs_tole32((*c->current_lfs)->workspace.dir_compact.dir->rev);
+    int err = lfs_dir_commitprog((*c->current_lfs), &(*c->current_lfs)->workspace.dir_compact.commit,
+            &(*c->current_lfs)->workspace.dir_compact.dir->rev, sizeof((*c->current_lfs)->workspace.dir_compact.dir->rev));
+    (*c->current_lfs)->workspace.dir_compact.dir->rev = lfs_fromle32((*c->current_lfs)->workspace.dir_compact.dir->rev);
     if (err) {
         if (err == LFS_ERR_CORRUPT) {
-            return dir_compact_relocate(lfs);
+            return dir_compact_relocate((*c->current_lfs));
         }
-        return dir_compact_done(lfs, err);
+        return dir_compact_done((*c->current_lfs), err);
     }
 
     // traverse the directory, this time writing out all unique tags
-    err = lfs_dir_traverse(lfs,
-            lfs->workspace.dir_compact.source, 0, 0xffffffff, lfs->workspace.dir_compact.attrs, lfs->workspace.dir_compact.attrcount,
+    err = lfs_dir_traverse((*c->current_lfs),
+            (*c->current_lfs)->workspace.dir_compact.source, 0, 0xffffffff, (*c->current_lfs)->workspace.dir_compact.attrs, (*c->current_lfs)->workspace.dir_compact.attrcount,
             LFS_MKTAG(0x400, 0x3ff, 0),
             LFS_MKTAG(LFS_TYPE_NAME, 0, 0),
-            lfs->workspace.dir_compact.begin, lfs->workspace.dir_compact.end, -lfs->workspace.dir_compact.begin,
+            (*c->current_lfs)->workspace.dir_compact.begin, (*c->current_lfs)->workspace.dir_compact.end, -(*c->current_lfs)->workspace.dir_compact.begin,
             lfs_dir_commit_commit, &(struct lfs_dir_commit_commit){
-                lfs, &lfs->workspace.dir_compact.commit});
+                (*c->current_lfs), &(*c->current_lfs)->workspace.dir_compact.commit});
     if (err) {
         if (err == LFS_ERR_CORRUPT) {
-            return dir_compact_relocate(lfs);
+            return dir_compact_relocate((*c->current_lfs));
         }
-        return dir_compact_done(lfs, err);
+        return dir_compact_done((*c->current_lfs), err);
     }
 
     // commit tail, which may be new after last size check
-    if (!lfs_pair_isnull(lfs->workspace.dir_compact.dir->tail)) {
-        lfs_pair_tole32(lfs->workspace.dir_compact.dir->tail);
-        err = lfs_dir_commitattr(lfs, &lfs->workspace.dir_compact.commit,
-                LFS_MKTAG(LFS_TYPE_TAIL + lfs->workspace.dir_compact.dir->split, 0x3ff, 8),
-                lfs->workspace.dir_compact.dir->tail);
-        lfs_pair_fromle32(lfs->workspace.dir_compact.dir->tail);
+    if (!lfs_pair_isnull((*c->current_lfs)->workspace.dir_compact.dir->tail)) {
+        lfs_pair_tole32((*c->current_lfs)->workspace.dir_compact.dir->tail);
+        err = lfs_dir_commitattr((*c->current_lfs), &(*c->current_lfs)->workspace.dir_compact.commit,
+                LFS_MKTAG(LFS_TYPE_TAIL + (*c->current_lfs)->workspace.dir_compact.dir->split, 0x3ff, 8),
+                (*c->current_lfs)->workspace.dir_compact.dir->tail);
+        lfs_pair_fromle32((*c->current_lfs)->workspace.dir_compact.dir->tail);
         if (err) {
             if (err == LFS_ERR_CORRUPT) {
-                return dir_compact_relocate(lfs);
+                return dir_compact_relocate((*c->current_lfs));
             }
-            return dir_compact_done(lfs, err);
+            return dir_compact_done((*c->current_lfs), err);
         }
     }
 
     // bring over gstate?
     lfs_gstate_t delta = {0};
-    if (!lfs->workspace.dir_compact.relocated) {
-        lfs_gstate_xor(&delta, &lfs->gdisk);
-        lfs_gstate_xor(&delta, &lfs->gstate);
+    if (!(*c->current_lfs)->workspace.dir_compact.relocated) {
+        lfs_gstate_xor(&delta, &(*c->current_lfs)->gdisk);
+        lfs_gstate_xor(&delta, &(*c->current_lfs)->gstate);
     }
-    lfs_gstate_xor(&delta, &lfs->gdelta);
+    lfs_gstate_xor(&delta, &(*c->current_lfs)->gdelta);
     delta.tag &= ~LFS_MKTAG(0, 0, 0x3ff);
 
-    err = lfs_dir_getgstate(lfs, lfs->workspace.dir_compact.dir, &delta);
+    err = lfs_dir_getgstate((*c->current_lfs), (*c->current_lfs)->workspace.dir_compact.dir, &delta);
     if (err) {
-        return dir_compact_done(lfs, err);
+        return dir_compact_done((*c->current_lfs), err);
     }
 
     if (!lfs_gstate_iszero(&delta)) {
         lfs_gstate_tole32(&delta);
-        err = lfs_dir_commitattr(lfs, &lfs->workspace.dir_compact.commit,
+        err = lfs_dir_commitattr((*c->current_lfs), &(*c->current_lfs)->workspace.dir_compact.commit,
                 LFS_MKTAG(LFS_TYPE_MOVESTATE, 0x3ff,
                     sizeof(delta)), &delta);
         if (err) {
             if (err == LFS_ERR_CORRUPT) {
-                return dir_compact_relocate(lfs);
+                return dir_compact_relocate((*c->current_lfs));
             }
-            return dir_compact_done(lfs, err);
+            return dir_compact_done((*c->current_lfs), err);
         }
     }
 
     // complete commit with crc
-    err = lfs_dir_commitcrc(lfs, &lfs->workspace.dir_compact.commit);
+    err = lfs_dir_commitcrc((*c->current_lfs), &(*c->current_lfs)->workspace.dir_compact.commit);
     if (err) {
         if (err == LFS_ERR_CORRUPT) {
-            return dir_compact_relocate(lfs);
+            return dir_compact_relocate((*c->current_lfs));
         }
-        return dir_compact_done(lfs, err);
+        return dir_compact_done((*c->current_lfs), err);
     }
 
     // successful compaction, swap dir pair to indicate most recent
-    LFS_ASSERT(lfs->workspace.dir_compact.commit.off % lfs->cfg->prog_size == 0);
-    lfs_pair_swap(lfs->workspace.dir_compact.dir->pair);
-    lfs->workspace.dir_compact.dir->count = lfs->workspace.dir_compact.end - lfs->workspace.dir_compact.begin;
-    lfs->workspace.dir_compact.dir->off = lfs->workspace.dir_compact.commit.off;
-    lfs->workspace.dir_compact.dir->etag = lfs->workspace.dir_compact.commit.ptag;
+    LFS_ASSERT((*c->current_lfs)->workspace.dir_compact.commit.off % (*c->current_lfs)->cfg->prog_size == 0);
+    lfs_pair_swap((*c->current_lfs)->workspace.dir_compact.dir->pair);
+    (*c->current_lfs)->workspace.dir_compact.dir->count = (*c->current_lfs)->workspace.dir_compact.end - (*c->current_lfs)->workspace.dir_compact.begin;
+    (*c->current_lfs)->workspace.dir_compact.dir->off = (*c->current_lfs)->workspace.dir_compact.commit.off;
+    (*c->current_lfs)->workspace.dir_compact.dir->etag = (*c->current_lfs)->workspace.dir_compact.commit.ptag;
     // update gstate
-    lfs->gdelta = (lfs_gstate_t){0};
-    if (!lfs->workspace.dir_compact.relocated) {
-        lfs->gdisk = lfs->gstate;
+    (*c->current_lfs)->gdelta = (lfs_gstate_t){0};
+    if (!(*c->current_lfs)->workspace.dir_compact.relocated) {
+        (*c->current_lfs)->gdisk = (*c->current_lfs)->gstate;
     }
 
     // Command successful
-    return dir_compact_done(lfs, 0);
+    return dir_compact_done((*c->current_lfs), 0);
 }
 
 static int dir_compact_relocate(lfs_t *lfs) {
@@ -2076,13 +2074,16 @@ static int dir_splittingcompact_start(lfs_t *lfs) {
     }
 
     // split into two metadata pairs and continue
+#ifdef NONBLOCK
     if (lfs->workspace.splittingcompact.splittingcompact_done_cb != NULL) {
         // TODO register Register callback dir_splittingcompact_split_pair_done
         // Call non blocking function
         return lfs_dir_split(lfs, lfs->workspace.splittingcompact.dir, lfs->workspace.splittingcompact.attrs, lfs->workspace.splittingcompact.attrcount,
             lfs->workspace.splittingcompact.source, lfs->workspace.splittingcompact.split, lfs->workspace.splittingcompact.end);
     }
-    else {
+    else
+#endif
+    {
         // Blocking call
         int err = lfs_dir_split(lfs, lfs->workspace.splittingcompact.dir, lfs->workspace.splittingcompact.attrs, lfs->workspace.splittingcompact.attrcount,
             lfs->workspace.splittingcompact.source, lfs->workspace.splittingcompact.split, lfs->workspace.splittingcompact.end);
@@ -2128,13 +2129,16 @@ static int dir_splittingcompact_relocation(lfs_t *lfs) {
         if ((lfs_size_t)size < lfs->cfg->block_count/2) {
             LFS_DEBUG("Expanding superblock at rev %"PRIu32, lfs->workspace.splittingcompact.dir->rev);
             // split into two metadata pairs and continue
+#ifdef NONBLOCK
             if (lfs->workspace.splittingcompact.splittingcompact_done_cb != NULL) {
                 // TODO Register callback dir_splittingcompact_reloc_split_done
                 // Call non blocking function
                 return lfs_dir_split(lfs, lfs->workspace.splittingcompact.dir, lfs->workspace.splittingcompact.attrs, lfs->workspace.splittingcompact.attrcount,
                         lfs->workspace.splittingcompact.source, lfs->workspace.splittingcompact.begin, lfs->workspace.splittingcompact.end);
             }
-            else {
+            else
+#endif
+            {
                 // Blocking call
                 int err = lfs_dir_split(lfs, lfs->workspace.splittingcompact.dir, lfs->workspace.splittingcompact.attrs, lfs->workspace.splittingcompact.attrcount,
                         lfs->workspace.splittingcompact.source, lfs->workspace.splittingcompact.begin, lfs->workspace.splittingcompact.end);
@@ -2703,8 +2707,9 @@ static int dir_orphaningcommit_pred(lfs_t *lfs, int state) {
         lfs_pair_tole32(lfs->workspace.orphaningcommit.ldir.pair);
 
         if (lfs->workspace.orphaningcommit.orphaningcommit_done_cb != NULL) {
+            // Register next state
+            dir_relocatingcommit_register_callback(lfs, dir_orphaningcommit_replace_bad_pair);
             // Non blocking call
-            // TODO register to continue on nest state 
             return lfs_dir_relocatingcommit(lfs, &lfs->workspace.orphaningcommit.pdir, lfs->workspace.orphaningcommit.lpair, LFS_MKATTRS(
                         {LFS_MKTAG_IF(moveid != 0x3ff,
                             LFS_TYPE_DELETE, moveid, 0), NULL},
@@ -2712,7 +2717,8 @@ static int dir_orphaningcommit_pred(lfs_t *lfs, int state) {
                             lfs->workspace.orphaningcommit.ldir.pair}),
                     NULL);
         }
-        else {
+        else
+        {
             // Blocking call
             state = lfs_dir_relocatingcommit(lfs, &lfs->workspace.orphaningcommit.pdir, lfs->workspace.orphaningcommit.lpair, LFS_MKATTRS(
                         {LFS_MKTAG_IF(moveid != 0x3ff,

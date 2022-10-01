@@ -515,6 +515,11 @@ struct lfs {
         // rawsync
         struct lfs_rawsync{
             lfs_ssize_t (*rawsync_done_cb)(struct lfs *lfs, lfs_ssize_t retval);
+            uint16_t type;
+            const void *buffer;
+            lfs_size_t size;
+            struct lfs_ctz ctz;
+            lfs_mattr mattr[2];
         } rawsync;
         // file_flush
         struct lfs_file_flush {

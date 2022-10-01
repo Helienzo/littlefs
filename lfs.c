@@ -1823,7 +1823,6 @@ static int dir_compact_commit_start(lfs_t *lfs) {
 }
 
 static int dir_compact_erase_done(const struct lfs_config *c, int retval) {
-    LFS_TRACE_SUPER("ERASE DONE %i", retval);
     // Make sure to clear callback
     (*c->current_lfs)->lfs_bd_callbacks.erase_cb = NULL;
 
@@ -2471,13 +2470,14 @@ static int dir_orphaningcommit_commit(lfs_t *lfs) {
     //lfs->orphaningcommit.pdir;
 
     if (lfs->workspace.orphaningcommit.orphaningcommit_done_cb != NULL) {
-        // Non blocking call
         // Register next state
         dir_relocatingcommit_register_callback(lfs, dir_orphaningcommit_commit_done);
+        // Non blocking call
         return lfs_dir_relocatingcommit(lfs, &lfs->workspace.orphaningcommit.ldir, lfs->workspace.orphaningcommit.dir->pair,
                 lfs->workspace.orphaningcommit.attrs, lfs->workspace.orphaningcommit.attrcount, &lfs->workspace.orphaningcommit.pdir);
     }
-    else {
+    else
+    {
         // Blocking call
         int state = lfs_dir_relocatingcommit(lfs, &lfs->workspace.orphaningcommit.ldir, lfs->workspace.orphaningcommit.dir->pair,
                 lfs->workspace.orphaningcommit.attrs, lfs->workspace.orphaningcommit.attrcount, &lfs->workspace.orphaningcommit.pdir);
@@ -2520,15 +2520,16 @@ static int dir_orphaningcommit_droped(lfs_t *lfs, int state) {
         lfs->workspace.orphaningcommit.lpair[1] = lfs->workspace.orphaningcommit.pdir.pair[1];
         lfs_pair_tole32(lfs->workspace.orphaningcommit.dir->tail);
         if (lfs->workspace.orphaningcommit.orphaningcommit_done_cb != NULL) {
-            // Non blocking call
             // Register next state
             dir_relocatingcommit_register_callback(lfs, dir_orphaningcommit_droped_done);
+            // Non blocking call
             return lfs_dir_relocatingcommit(lfs, &lfs->workspace.orphaningcommit.pdir, lfs->workspace.orphaningcommit.lpair, LFS_MKATTRS(
                 {LFS_MKTAG(LFS_TYPE_TAIL + lfs->workspace.orphaningcommit.dir->split, 0x3ff, 8),
                     lfs->workspace.orphaningcommit.dir->tail}),
             NULL);
         }
-        else {
+        else
+        {
             // Blocking call
             state = lfs_dir_relocatingcommit(lfs, &lfs->workspace.orphaningcommit.pdir, lfs->workspace.orphaningcommit.lpair, LFS_MKATTRS(
                 {LFS_MKTAG(LFS_TYPE_TAIL + lfs->workspace.orphaningcommit.dir->split, 0x3ff, 8),
@@ -2631,7 +2632,8 @@ static int dir_orphaningcommit_relocated(lfs_t *lfs, int state) {
                         {tag, lfs->workspace.orphaningcommit.ldir.pair}),
                     NULL);
         }
-        else {
+        else
+        {
             state = lfs_dir_relocatingcommit(lfs, &lfs->workspace.orphaningcommit.pdir, lfs->workspace.orphaningcommit.ppair, LFS_MKATTRS(
                         {LFS_MKTAG_IF(moveid != 0x3ff,
                             LFS_TYPE_DELETE, moveid, 0), NULL},
@@ -3864,40 +3866,42 @@ static lfs_ssize_t rawsync_file_flush_done_cb(lfs_t *lfs, lfs_ssize_t retval) {
     if ((lfs->workspace.file->flags & LFS_F_DIRTY) &&
             !lfs_pair_isnull(lfs->workspace.file->m.pair)) {
         // update dir entry
-        uint16_t type;
-        const void *buffer;
-        lfs_size_t size;
-        struct lfs_ctz ctz;
         if (lfs->workspace.file->flags & LFS_F_INLINE) {
             // inline the whole file
-            type = LFS_TYPE_INLINESTRUCT;
-            buffer = lfs->workspace.file->cache.buffer;
-            size = lfs->workspace.file->ctz.size;
+            lfs->workspace.rawsync.type = LFS_TYPE_INLINESTRUCT;
+            lfs->workspace.rawsync.buffer = lfs->workspace.file->cache.buffer;
+            lfs->workspace.rawsync.size = lfs->workspace.file->ctz.size;
         } else {
             // update the ctz reference
-            type = LFS_TYPE_CTZSTRUCT;
+            lfs->workspace.rawsync.type = LFS_TYPE_CTZSTRUCT;
             // copy ctz so alloc will work during a relocate
-            ctz = lfs->workspace.file->ctz;
-            lfs_ctz_tole32(&ctz);
-            buffer = &ctz;
-            size = sizeof(ctz);
+            lfs->workspace.rawsync.ctz = lfs->workspace.file->ctz;
+            lfs_ctz_tole32(&lfs->workspace.rawsync.ctz);
+            lfs->workspace.rawsync.buffer = &lfs->workspace.rawsync.ctz;
+            lfs->workspace.rawsync.size = sizeof(lfs->workspace.rawsync.ctz);
         }
+
+        // Prepare attributes
+        lfs->workspace.rawsync.mattr[0].tag    = lfs->workspace.rawsync.type << 20 | lfs->workspace.file->id << 10 | lfs->workspace.rawsync.size;
+        lfs->workspace.rawsync.mattr[0].buffer = lfs->workspace.rawsync.buffer;
+        lfs->workspace.rawsync.mattr[1].tag    = LFS_FROM_USERATTRS << 20 | lfs->workspace.file->id << 10 | lfs->workspace.file->cfg->attr_count;
+        lfs->workspace.rawsync.mattr[1].buffer = lfs->workspace.file->cfg->attrs;
 
         // commit file data and attributes
         if (lfs->workspace.rawsync.rawsync_done_cb != NULL) {
             // Register callback
             dir_commit_register_callback(lfs, rawsync_dir_commit_done);
             // Non blocking call
-            return lfs_dir_commit(lfs, &lfs->workspace.file->m, LFS_MKATTRS(
-                    {LFS_MKTAG(type, lfs->workspace.file->id, size), buffer},
-                    {LFS_MKTAG(LFS_FROM_USERATTRS, lfs->workspace.file->id,
-                        lfs->workspace.file->cfg->attr_count), lfs->workspace.file->cfg->attrs}));
+            return lfs_dir_commit(lfs,
+                    &lfs->workspace.file->m,
+                    lfs->workspace.rawsync.mattr,
+                    2);
         }
         else  {
-            int err = lfs_dir_commit(lfs, &lfs->workspace.file->m, LFS_MKATTRS(
-                    {LFS_MKTAG(type, lfs->workspace.file->id, size), buffer},
-                    {LFS_MKTAG(LFS_FROM_USERATTRS, lfs->workspace.file->id,
-                        lfs->workspace.file->cfg->attr_count), lfs->workspace.file->cfg->attrs}));
+            int err = lfs_dir_commit(lfs,
+                    &lfs->workspace.file->m,
+                    lfs->workspace.rawsync.mattr,
+                    2);//sizeof(lfs->workspace.rawsync.mattr) / sizeof(lfs_mattr));
             // Call next State
             return rawsync_dir_commit_done(lfs, err);
         }
@@ -6191,6 +6195,22 @@ int lfs_mount(lfs_t *lfs, const struct lfs_config *cfg) {
             cfg->block_cycles, cfg->cache_size, cfg->lookahead_size,
             cfg->read_buffer, cfg->prog_buffer, cfg->lookahead_buffer,
             cfg->name_max, cfg->file_max, cfg->attr_max);
+
+    // TODO this must be done at a better place
+    // Init callbacks to null
+    lfs->lfs_bd_callbacks.erase_cb = NULL;
+    ctz_extend_register_callback(lfs, NULL);
+    flushedwrite_register_callback(lfs, NULL);
+    lfs_register_command_done_callback(lfs, NULL);
+    file_flush_register_callback(lfs, NULL);
+    rawsync_register_callback(lfs, NULL);
+    bd_flush_register_callback(lfs, NULL);
+    dir_commit_register_callback(lfs, NULL);
+    dir_compact_register_callback(lfs, NULL);
+    dir_orphaningcommit_register_callback(lfs, NULL);
+    dir_relocatingcommit_register_callback(lfs, NULL);
+    dir_splittingcompact_register_callback(lfs, NULL);
+
 
     err = lfs_rawmount(lfs, cfg);
 

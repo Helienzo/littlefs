@@ -542,6 +542,7 @@ static lfs_ssize_t lfs_file_flushedwrite(lfs_t *lfs, lfs_file_t *file,
 static lfs_ssize_t lfs_file_rawwrite(lfs_t *lfs, lfs_file_t *file,
         const void *buffer, lfs_size_t size);
 static int lfs_file_rawsync(lfs_t *lfs, lfs_file_t *file);
+static lfs_ssize_t rawsync_register_callback(lfs_t *lfs, lfs_ssize_t (*cb)(lfs_t *lfs, lfs_ssize_t retval));
 static int lfs_file_outline(lfs_t *lfs, lfs_file_t *file);
 static int lfs_file_flush(lfs_t *lfs, lfs_file_t *file);
 
@@ -3894,7 +3895,6 @@ static int lfs_file_flush(lfs_t *lfs, lfs_file_t *file) {
 static lfs_ssize_t rawsync_file_flush_done_cb(lfs_t *lfs, lfs_ssize_t retval);
 static int rawsync_dir_commit_done(lfs_t *lfs, int retval);
 static int rawsync_done(lfs_t *lfs, int retval);
-static lfs_ssize_t rawsync_register_callback(lfs_t *lfs, lfs_ssize_t (*cb)(lfs_t *lfs, lfs_ssize_t retval));
 
 static lfs_ssize_t rawsync_register_callback(lfs_t *lfs, lfs_ssize_t (*cb)(lfs_t *lfs, lfs_ssize_t retval)) {
     if (cb != NULL) {
@@ -3985,11 +3985,7 @@ static int rawsync_dir_commit_done(lfs_t *lfs, int retval) {
 static int rawsync_done(lfs_t *lfs, int retval) {
     if (lfs->workspace.rawsync.rawsync_done_cb != NULL) {
         // Call caller if this was a non blocking call
-        lfs->workspace.rawsync.rawsync_done_cb(lfs, retval);
-        // Reset callback
-        rawsync_register_callback(lfs, NULL);
-        lfs_register_command_done_callback(lfs, NULL);
-        return retval;
+        return lfs->workspace.rawsync.rawsync_done_cb(lfs, retval);
     }
     else {
         return retval;
@@ -6454,6 +6450,18 @@ int lfs_file_close(lfs_t *lfs, lfs_file_t *file) {
 }
 
 #ifndef LFS_READONLY
+static int file_sync_done(lfs_t *lfs, int retval) {
+
+    if (lfs->action_complete_cb != NULL) {
+        lfs->action_complete_cb(lfs, retval);
+    }
+    // Reset callback
+    rawsync_register_callback(lfs, NULL);
+    // Reset callback
+    lfs_register_command_done_callback(lfs, NULL);
+    return retval;
+}
+
 int lfs_file_sync(lfs_t *lfs, lfs_file_t *file) {
     int err = LFS_LOCK(lfs->cfg);
     if (err) {
@@ -6463,7 +6471,7 @@ int lfs_file_sync(lfs_t *lfs, lfs_file_t *file) {
     LFS_ASSERT(lfs_mlist_isopen(lfs->mlist, (struct lfs_mlist*)file));
 
     if (lfs->action_complete_cb != NULL) {
-        rawsync_register_callback(lfs, lfs->action_complete_cb);
+        rawsync_register_callback(lfs, file_sync_done);
     } else {
         rawsync_register_callback(lfs, NULL);
     }

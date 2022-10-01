@@ -2077,7 +2077,7 @@ static int dir_splittingcompact_start(lfs_t *lfs) {
 
     // split into two metadata pairs and continue
     if (lfs->workspace.splittingcompact.splittingcompact_done_cb != NULL) {
-        // Register callback dir_splittingcompact_split_pair_done
+        // TODO register Register callback dir_splittingcompact_split_pair_done
         // Call non blocking function
         return lfs_dir_split(lfs, lfs->workspace.splittingcompact.dir, lfs->workspace.splittingcompact.attrs, lfs->workspace.splittingcompact.attrcount,
             lfs->workspace.splittingcompact.source, lfs->workspace.splittingcompact.split, lfs->workspace.splittingcompact.end);

@@ -1826,6 +1826,9 @@ static int dir_compact_erase_done(const struct lfs_config *c, int retval) {
     // TODO is it wise having a stack variable here?
     lfs_t *lfs = *(c->current_lfs);
 
+    // Make sure to clear callback
+    lfs->lfs_bd_callbacks.erase_cb = NULL;
+
     if (retval) {
         if (retval == LFS_ERR_CORRUPT) {
             return dir_compact_relocate(lfs);
@@ -2227,7 +2230,8 @@ static int dir_relocatingcommit_splitcom(lfs_t *lfs) {
     lfs_cache_drop(lfs, &lfs->pcache);
 
     if (lfs->workspace.relocatingcommit.relocatingcommit_done_cb != NULL) {
-        // TODO register to continue on nest state
+        // Register next state
+        dir_splittingcompact_register_callback(lfs, dir_relocatingcommit_splitcom_done);
         return lfs_dir_splittingcompact(lfs, lfs->workspace.relocatingcommit.dir, lfs->workspace.relocatingcommit.attrs, lfs->workspace.relocatingcommit.attrcount,
             lfs->workspace.relocatingcommit.dir, 0, lfs->workspace.relocatingcommit.dir->count);
     }
@@ -2241,6 +2245,9 @@ static int dir_relocatingcommit_splitcom(lfs_t *lfs) {
 }
 
 static int dir_relocatingcommit_splitcom_done(lfs_t *lfs, int state) {
+    // Reset the callback
+    dir_splittingcompact_register_callback(lfs, NULL);
+
     lfs->workspace.relocatingcommit.state = state;
     if (state < 0) {
         return dir_relocatingcommit_done(lfs, state);
@@ -2461,7 +2468,8 @@ static int dir_orphaningcommit_commit(lfs_t *lfs) {
 
     if (lfs->workspace.orphaningcommit.orphaningcommit_done_cb != NULL) {
         // Non blocking call
-        // TODO register next state dir_orphaningcommit_commit_done
+        // Register next state
+        dir_relocatingcommit_register_callback(lfs, dir_orphaningcommit_commit_done);
         return lfs_dir_relocatingcommit(lfs, &lfs->workspace.orphaningcommit.ldir, lfs->workspace.orphaningcommit.dir->pair,
                 lfs->workspace.orphaningcommit.attrs, lfs->workspace.orphaningcommit.attrcount, &lfs->workspace.orphaningcommit.pdir);
     }
@@ -2475,6 +2483,9 @@ static int dir_orphaningcommit_commit(lfs_t *lfs) {
 }
 
 static int dir_orphaningcommit_commit_done(lfs_t *lfs, int state) {
+    // Reset callback
+    dir_relocatingcommit_register_callback(lfs, NULL);
+
     if (state < 0) {
         return dir_orphaningcommit_done(lfs, state);
     }
@@ -2506,7 +2517,8 @@ static int dir_orphaningcommit_droped(lfs_t *lfs, int state) {
         lfs_pair_tole32(lfs->workspace.orphaningcommit.dir->tail);
         if (lfs->workspace.orphaningcommit.orphaningcommit_done_cb != NULL) {
             // Non blocking call
-            // TODO register next state dir_orphaningcommit_droped_done
+            // Register next state
+            dir_relocatingcommit_register_callback(lfs, dir_orphaningcommit_droped_done);
             return lfs_dir_relocatingcommit(lfs, &lfs->workspace.orphaningcommit.pdir, lfs->workspace.orphaningcommit.lpair, LFS_MKATTRS(
                 {LFS_MKTAG(LFS_TYPE_TAIL + lfs->workspace.orphaningcommit.dir->split, 0x3ff, 8),
                     lfs->workspace.orphaningcommit.dir->tail}),
@@ -2527,6 +2539,9 @@ static int dir_orphaningcommit_droped(lfs_t *lfs, int state) {
 }
 
 static int dir_orphaningcommit_droped_done(lfs_t *lfs, int state) {
+    // Reset callback
+    dir_relocatingcommit_register_callback(lfs, NULL);
+
     lfs_pair_fromle32(lfs->workspace.orphaningcommit.dir->tail);
     if (state < 0) {
         return dir_orphaningcommit_done(lfs, state);
@@ -2603,9 +2618,9 @@ static int dir_orphaningcommit_relocated(lfs_t *lfs, int state) {
         lfs->workspace.orphaningcommit.ppair[1] = lfs->workspace.orphaningcommit.pdir.pair[1];
 
         lfs_pair_tole32(lfs->workspace.orphaningcommit.ldir.pair);
-        // TODO return
         if (lfs->workspace.orphaningcommit.orphaningcommit_done_cb != NULL) {
-            // TODO register to continue on nest state 
+            // Register next state
+            dir_relocatingcommit_register_callback(lfs, dir_orphaningcommit_relocated_done);
             return lfs_dir_relocatingcommit(lfs, &lfs->workspace.orphaningcommit.pdir, lfs->workspace.orphaningcommit.ppair, LFS_MKATTRS(
                         {LFS_MKTAG_IF(moveid != 0x3ff,
                             LFS_TYPE_DELETE, moveid, 0), NULL},
@@ -2630,6 +2645,9 @@ static int dir_orphaningcommit_relocated(lfs_t *lfs, int state) {
 }
 
 static int dir_orphaningcommit_relocated_done(lfs_t *lfs, int state) {
+
+    // Reset callback
+    dir_relocatingcommit_register_callback(lfs, NULL);
 
     // TODO this if is a copy from above, only check if we actually entered above interstate_check
     lfs_pair_fromle32(lfs->workspace.orphaningcommit.ldir.pair);
@@ -2796,6 +2814,9 @@ static int dir_commit_done(lfs_t *lfs, int retval) {
 }
 
 static int dir_commit_orphaningcommit_done(lfs_t *lfs, int orphans) {
+    // Reset callback
+    dir_orphaningcommit_register_callback(lfs, NULL);
+
     if (orphans < 0) {
         return orphans;
     }
@@ -2819,7 +2840,8 @@ static int lfs_dir_commit(lfs_t *lfs, lfs_mdir_t *dir,
 
     if (lfs->workspace.dir_commit.dir_commit_done_cb != NULL) {
         // Call caller if this was a non blocking call
-        // TODO register dir_commit_orphaningcommit_done
+        // Register callback
+        dir_orphaningcommit_register_callback(lfs, dir_commit_orphaningcommit_done);
         return lfs_dir_orphaningcommit(lfs, dir, attrs, attrcount);
     }
     else {
@@ -3806,6 +3828,7 @@ static int lfs_file_flush(lfs_t *lfs, lfs_file_t *file) {
 #ifndef LFS_READONLY
 // ********************* RAWSYNC *********************
 static lfs_ssize_t rawsync_file_flush_done_cb(lfs_t *lfs, lfs_ssize_t retval);
+static int rawsync_dir_commit_done(lfs_t *lfs, int retval);
 static int rawsync_done(lfs_t *lfs, int retval);
 static lfs_ssize_t rawsync_register_callback(lfs_t *lfs, lfs_ssize_t (*cb)(lfs_t *lfs, lfs_ssize_t retval));
 
@@ -3855,17 +3878,39 @@ static lfs_ssize_t rawsync_file_flush_done_cb(lfs_t *lfs, lfs_ssize_t retval) {
         }
 
         // commit file data and attributes
-        int err = lfs_dir_commit(lfs, &lfs->workspace.file->m, LFS_MKATTRS(
-                {LFS_MKTAG(type, lfs->workspace.file->id, size), buffer},
-                {LFS_MKTAG(LFS_FROM_USERATTRS, lfs->workspace.file->id,
-                    lfs->workspace.file->cfg->attr_count), lfs->workspace.file->cfg->attrs}));
-        if (err) {
-            lfs->workspace.file->flags |= LFS_F_ERRED;
-            return rawsync_done(lfs, err);
+        if (lfs->workspace.rawsync.rawsync_done_cb != NULL) {
+            // Register callback
+            dir_commit_register_callback(lfs, rawsync_dir_commit_done);
+            // Non blocking call
+            return lfs_dir_commit(lfs, &lfs->workspace.file->m, LFS_MKATTRS(
+                    {LFS_MKTAG(type, lfs->workspace.file->id, size), buffer},
+                    {LFS_MKTAG(LFS_FROM_USERATTRS, lfs->workspace.file->id,
+                        lfs->workspace.file->cfg->attr_count), lfs->workspace.file->cfg->attrs}));
         }
-
-        lfs->workspace.file->flags &= ~LFS_F_DIRTY;
+        else  {
+            int err = lfs_dir_commit(lfs, &lfs->workspace.file->m, LFS_MKATTRS(
+                    {LFS_MKTAG(type, lfs->workspace.file->id, size), buffer},
+                    {LFS_MKTAG(LFS_FROM_USERATTRS, lfs->workspace.file->id,
+                        lfs->workspace.file->cfg->attr_count), lfs->workspace.file->cfg->attrs}));
+            // Call next State
+            return rawsync_dir_commit_done(lfs, err);
+        }
     }
+
+    // Command successful
+    return rawsync_done(lfs, 0);
+}
+
+static int rawsync_dir_commit_done(lfs_t *lfs, int retval) {
+    // Reset callback
+    dir_commit_register_callback(lfs, NULL);
+
+    if (retval) {
+        lfs->workspace.file->flags |= LFS_F_ERRED;
+        return rawsync_done(lfs, retval);
+    }
+
+    lfs->workspace.file->flags &= ~LFS_F_DIRTY;
 
     // Command successful
     return rawsync_done(lfs, 0);
@@ -3873,10 +3918,10 @@ static lfs_ssize_t rawsync_file_flush_done_cb(lfs_t *lfs, lfs_ssize_t retval) {
 
 static int rawsync_done(lfs_t *lfs, int retval) {
     if (lfs->workspace.rawsync.rawsync_done_cb != NULL) {
-        // TODO do we need to reset the command done here?:
         // Call caller if this was a non blocking call
         lfs->workspace.rawsync.rawsync_done_cb(lfs, retval);
         // Reset callback
+        rawsync_register_callback(lfs, NULL);
         lfs_register_command_done_callback(lfs, NULL);
         return retval;
     }
@@ -3896,8 +3941,16 @@ static int lfs_file_rawsync(lfs_t *lfs, lfs_file_t *file) {
         return rawsync_done(lfs ,0);
     }
 
-    file_flush_register_callback(lfs, rawsync_file_flush_done_cb);
-    return lfs_file_flush(lfs, file);
+    if (lfs->workspace.rawsync.rawsync_done_cb != NULL) {
+        // Register callback
+        file_flush_register_callback(lfs, rawsync_file_flush_done_cb);
+        // Non blocking call
+        return lfs_file_flush(lfs, file);
+    }
+    else  {
+        int err = lfs_file_flush(lfs, file);
+        return rawsync_file_flush_done_cb(lfs, err);
+    }
 }
 // ********************* RAWSYNC *********************
 #endif

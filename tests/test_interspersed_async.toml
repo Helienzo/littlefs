@@ -82,9 +82,18 @@ code = '''
     for (int j = 0; j < FILES; j++) {
         lfs_file_write(&lfs, &file, (const void*)"~", 1) => 1;
         lfs_register_command_done_callback(&lfs, lfs_testbd_action_complete_cb);
-        lfs_file_sync(&lfs, &file) => 0;
-        lfs_testbd_call_queued() => 0;
-
+        int tmp_ret = lfs_file_sync(&lfs, &file);
+        // Check if we have any queued calls
+        if (!lfs_testbd_call_queued()) {
+            tmp_ret => 0;
+        }
+        else {
+            while (lfs_testbd_call_queued()) {
+                lfs_testbd_step();
+            }
+            tmp_ret = lfs_testbd_get_cb_val();
+            tmp_ret => 0;
+        }
         sprintf(path, "%c", alphas[j]);
         lfs_remove(&lfs, path) => 0;
     }

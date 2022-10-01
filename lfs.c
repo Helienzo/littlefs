@@ -2011,99 +2011,196 @@ static int lfs_dir_compact(lfs_t *lfs,
 #endif
 
 #ifndef LFS_READONLY
-static int lfs_dir_splittingcompact(lfs_t *lfs, lfs_mdir_t *dir,
-        const struct lfs_mattr *attrs, int attrcount,
-        lfs_mdir_t *source, uint16_t begin, uint16_t end) {
-    while (true) {
-        // find size of first split, we do this by halving the split until
-        // the metadata is guaranteed to fit
-        //
-        // Note that this isn't a true binary search, we never increase the
-        // split size. This may result in poorly distributed metadata but isn't
-        // worth the extra code size or performance hit to fix.
-        lfs_size_t split = begin;
-        while (end - split > 1) {
-            lfs_size_t size = 0;
-            int err = lfs_dir_traverse(lfs,
-                    source, 0, 0xffffffff, attrs, attrcount,
-                    LFS_MKTAG(0x400, 0x3ff, 0),
-                    LFS_MKTAG(LFS_TYPE_NAME, 0, 0),
-                    split, end, -split,
-                    lfs_dir_commit_size, &size);
-            if (err) {
-                return err;
-            }
+// ********************* DIR_SPLITTINGCOMPACT *********************
+static int dir_splittingcompact_register_callback(lfs_t *lfs, lfs_ssize_t (*cb)(struct lfs *lfs, lfs_ssize_t retval));
+static int dir_splittingcompact_start(lfs_t *lfs);
+static int dir_splittingcompact_split_pair_done(lfs_t *lfs, int retval);
+static int dir_splittingcompact_relocation(lfs_t *lfs);
+static int dir_splittingcompact_reloc_split_done(lfs_t *lfs, int retval);
+static int dir_splittingcompact_compact(lfs_t *lfs);
+static int dir_splittingcompact_done(lfs_t *lfs, int retval);
 
-            // space is complicated, we need room for tail, crc, gstate,
-            // cleanup delete, and we cap at half a block to give room
-            // for metadata updates.
-            if (end - split < 0xff
-                    && size <= lfs_min(lfs->cfg->block_size - 36,
-                        lfs_alignup(
-                            (lfs->cfg->metadata_max
-                                ? lfs->cfg->metadata_max
-                                : lfs->cfg->block_size)/2,
-                            lfs->cfg->prog_size))) {
-                break;
-            }
+static int dir_splittingcompact_register_callback(lfs_t *lfs, lfs_ssize_t (*cb)(struct lfs *lfs, lfs_ssize_t retval)) {
+    if (cb != NULL) {
+        lfs->workspace.splittingcompact.splittingcompact_done_cb = cb;
+        return LFS_ERR_OK;
+    } else {
+        lfs->workspace.splittingcompact.splittingcompact_done_cb = NULL;
+        return LFS_ERR_INVAL;
+    }
+}
 
-            split = split + ((end - split) / 2);
-        }
-
-        if (split == begin) {
-            // no split needed
-            break;
-        }
-
-        // split into two metadata pairs and continue
-        int err = lfs_dir_split(lfs, dir, attrs, attrcount,
-                source, split, end);
-        if (err && err != LFS_ERR_NOSPC) {
-            return err;
-        }
-
+static int dir_splittingcompact_start(lfs_t *lfs) {
+    // find size of first split, we do this by halving the split until
+    // the metadata is guaranteed to fit
+    //
+    // Note that this isn't a true binary search, we never increase the
+    // split size. This may result in poorly distributed metadata but isn't
+    // worth the extra code size or performance hit to fix.
+    // Store context
+    lfs->workspace.splittingcompact.split = lfs->workspace.splittingcompact.begin;
+    while (lfs->workspace.splittingcompact.end - lfs->workspace.splittingcompact.split > 1) {
+        lfs_size_t size = 0;
+        int err = lfs_dir_traverse(lfs,
+                lfs->workspace.splittingcompact.source, 0, 0xffffffff, lfs->workspace.splittingcompact.attrs, lfs->workspace.splittingcompact.attrcount,
+                LFS_MKTAG(0x400, 0x3ff, 0),
+                LFS_MKTAG(LFS_TYPE_NAME, 0, 0),
+                lfs->workspace.splittingcompact.split, lfs->workspace.splittingcompact.end, -lfs->workspace.splittingcompact.split,
+                lfs_dir_commit_size, &size);
         if (err) {
-            // we can't allocate a new block, try to compact with degraded
-            // performance
-            LFS_WARN("Unable to split {0x%"PRIx32", 0x%"PRIx32"}",
-                    dir->pair[0], dir->pair[1]);
-            break;
-        } else {
-            end = split;
+            return dir_splittingcompact_done(lfs, err);
         }
+
+        // space is complicated, we need room for tail, crc, gstate,
+        // cleanup delete, and we cap at half a block to give room
+        // for metadata updates.
+        if (lfs->workspace.splittingcompact.end - lfs->workspace.splittingcompact.split < 0xff
+                && size <= lfs_min(lfs->cfg->block_size - 36,
+                    lfs_alignup(
+                        (lfs->cfg->metadata_max
+                            ? lfs->cfg->metadata_max
+                            : lfs->cfg->block_size)/2,
+                        lfs->cfg->prog_size))) {
+            break;
+        }
+
+        lfs->workspace.splittingcompact.split = lfs->workspace.splittingcompact.split + ((lfs->workspace.splittingcompact.end - lfs->workspace.splittingcompact.split) / 2);
     }
 
-    if (lfs_dir_needsrelocation(lfs, dir)
-            && lfs_pair_cmp(dir->pair, (const lfs_block_t[2]){0, 1}) == 0) {
+    if (lfs->workspace.splittingcompact.split == lfs->workspace.splittingcompact.begin) {
+        // no split needed
+        return dir_splittingcompact_relocation(lfs);
+    }
+
+    // split into two metadata pairs and continue
+    if (lfs->workspace.splittingcompact.splittingcompact_done_cb != NULL) {
+        // Register callback dir_splittingcompact_split_pair_done
+        // Call non blocking function
+        return lfs_dir_split(lfs, lfs->workspace.splittingcompact.dir, lfs->workspace.splittingcompact.attrs, lfs->workspace.splittingcompact.attrcount,
+            lfs->workspace.splittingcompact.source, lfs->workspace.splittingcompact.split, lfs->workspace.splittingcompact.end);
+    }
+    else {
+        // Blocking call
+        int err = lfs_dir_split(lfs, lfs->workspace.splittingcompact.dir, lfs->workspace.splittingcompact.attrs, lfs->workspace.splittingcompact.attrcount,
+            lfs->workspace.splittingcompact.source, lfs->workspace.splittingcompact.split, lfs->workspace.splittingcompact.end);
+        // TODO next state
+        return dir_splittingcompact_split_pair_done(lfs, err);
+    }
+}
+
+static int dir_splittingcompact_split_pair_done(lfs_t *lfs, int retval) {
+    if (retval && retval != LFS_ERR_NOSPC) {
+        return dir_splittingcompact_done(lfs, retval);
+    }
+
+    if (retval) {
+        // we can't allocate a new block, try to compact with degraded
+        // performance
+        LFS_WARN("Unable to split {0x%"PRIx32", 0x%"PRIx32"}",
+                lfs->workspace.splittingcompact.dir->pair[0], lfs->workspace.splittingcompact.dir->pair[1]);
+
+        // Go to next state
+        return dir_splittingcompact_relocation(lfs);
+    } else {
+        lfs->workspace.splittingcompact.end = lfs->workspace.splittingcompact.split;
+    }
+    // Run loop again
+    return dir_splittingcompact_start(lfs);
+}
+
+static int dir_splittingcompact_relocation(lfs_t *lfs) {
+
+    if (lfs_dir_needsrelocation(lfs, lfs->workspace.splittingcompact.dir)
+            && lfs_pair_cmp(lfs->workspace.splittingcompact.dir->pair, (const lfs_block_t[2]){0, 1}) == 0) {
         // oh no! we're writing too much to the superblock,
         // should we expand?
         lfs_ssize_t size = lfs_fs_rawsize(lfs);
         if (size < 0) {
-            return size;
+            // Propagate error
+            return dir_splittingcompact_done(lfs, size);
         }
 
         // do we have extra space? littlefs can't reclaim this space
         // by itself, so expand cautiously
         if ((lfs_size_t)size < lfs->cfg->block_count/2) {
-            LFS_DEBUG("Expanding superblock at rev %"PRIu32, dir->rev);
-            int err = lfs_dir_split(lfs, dir, attrs, attrcount,
-                    source, begin, end);
-            if (err && err != LFS_ERR_NOSPC) {
-                return err;
+            LFS_DEBUG("Expanding superblock at rev %"PRIu32, lfs->workspace.splittingcompact.dir->rev);
+            // split into two metadata pairs and continue
+            if (lfs->workspace.splittingcompact.splittingcompact_done_cb != NULL) {
+                // TODO Register callback dir_splittingcompact_reloc_split_done
+                // Call non blocking function
+                return lfs_dir_split(lfs, lfs->workspace.splittingcompact.dir, lfs->workspace.splittingcompact.attrs, lfs->workspace.splittingcompact.attrcount,
+                        lfs->workspace.splittingcompact.source, lfs->workspace.splittingcompact.begin, lfs->workspace.splittingcompact.end);
             }
-
-            if (err) {
-                // welp, we tried, if we ran out of space there's not much
-                // we can do, we'll error later if we've become frozen
-                LFS_WARN("Unable to expand superblock");
-            } else {
-                end = begin;
+            else {
+                // Blocking call
+                int err = lfs_dir_split(lfs, lfs->workspace.splittingcompact.dir, lfs->workspace.splittingcompact.attrs, lfs->workspace.splittingcompact.attrcount,
+                        lfs->workspace.splittingcompact.source, lfs->workspace.splittingcompact.begin, lfs->workspace.splittingcompact.end);
+                return dir_splittingcompact_reloc_split_done(lfs, err);
             }
         }
     }
 
-    return lfs_dir_compact(lfs, dir, attrs, attrcount, source, begin, end);
+    return dir_splittingcompact_compact(lfs);
 }
+
+static int dir_splittingcompact_reloc_split_done(lfs_t *lfs, int retval) {
+    if (retval && retval != LFS_ERR_NOSPC) {
+        return dir_splittingcompact_done(lfs, retval);
+    }
+
+    if (retval) {
+        // welp, we tried, if we ran out of space there's not much
+        // we can do, we'll error later if we've become frozen
+        LFS_WARN("Unable to expand superblock");
+    } else {
+        lfs->workspace.splittingcompact.end = lfs->workspace.splittingcompact.begin;
+    }
+
+    return dir_splittingcompact_compact(lfs);
+}
+
+static int dir_splittingcompact_compact(lfs_t *lfs) {
+    if (lfs->workspace.splittingcompact.splittingcompact_done_cb != NULL) {
+        // Register callback
+        dir_compact_register_callback(lfs, dir_splittingcompact_done);
+        // Call non blocking function
+        return lfs_dir_compact(lfs, lfs->workspace.splittingcompact.dir, lfs->workspace.splittingcompact.attrs, lfs->workspace.splittingcompact.attrcount, lfs->workspace.splittingcompact.source, lfs->workspace.splittingcompact.begin, lfs->workspace.splittingcompact.end);
+    }
+    // Blocking call
+    int res = lfs_dir_compact(lfs, lfs->workspace.splittingcompact.dir, lfs->workspace.splittingcompact.attrs, lfs->workspace.splittingcompact.attrcount, lfs->workspace.splittingcompact.source, lfs->workspace.splittingcompact.begin, lfs->workspace.splittingcompact.end);
+    return dir_splittingcompact_done(lfs, res);
+}
+
+static int dir_splittingcompact_done(lfs_t *lfs, int retval) {
+    // Reset the compact callback
+    dir_compact_register_callback(lfs, NULL);
+
+    // Call done cb
+    if (lfs->workspace.splittingcompact.splittingcompact_done_cb != NULL) {
+        return lfs->workspace.splittingcompact.splittingcompact_done_cb(lfs, retval);
+    }
+    else {
+        return retval;
+    }
+}
+
+static int lfs_dir_splittingcompact(lfs_t *lfs, lfs_mdir_t *dir,
+        const struct lfs_mattr *attrs, int attrcount,
+        lfs_mdir_t *source, uint16_t begin, uint16_t end) {
+
+    // Store context
+    lfs->workspace.splittingcompact.dir = dir;
+    lfs->workspace.splittingcompact.attrs = attrs;
+    lfs->workspace.splittingcompact.attrcount = attrcount;
+    lfs->workspace.splittingcompact.source = source;
+    lfs->workspace.splittingcompact.begin = begin;
+    lfs->workspace.splittingcompact.end = end;
+
+    // Call first state
+    return dir_splittingcompact_start(lfs);
+}
+
+// ********************* DIR_SPLITTINGCOMPACT *********************
 #endif
 
 #ifndef LFS_READONLY
@@ -6004,6 +6101,7 @@ int lfs_format(lfs_t *lfs, const struct lfs_config *cfg) {
     dir_compact_register_callback(lfs, NULL);
     dir_orphaningcommit_register_callback(lfs, NULL);
     dir_relocatingcommit_register_callback(lfs, NULL);
+    dir_splittingcompact_register_callback(lfs, NULL);
 
     err = lfs_rawformat(lfs, cfg);
 

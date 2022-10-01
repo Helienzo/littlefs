@@ -446,8 +446,19 @@ struct lfs {
         // Common for all steps
         struct lfs *lfs;
         lfs_file_t *file;
+        // dir_splittingcompact
+        struct dir_splittingcompact {
+            lfs_ssize_t (*splittingcompact_done_cb)(struct lfs *lfs, lfs_ssize_t retval);
+            lfs_mdir_t *dir;
+            const lfs_mattr *attrs;
+            int attrcount;
+            lfs_mdir_t *source;
+            uint16_t begin;
+            uint16_t end;
+            lfs_size_t split;
+        } splittingcompact;
         // dir_relocatingcommit
-        struct dir_relocatingcommit{
+        struct dir_relocatingcommit {
             lfs_ssize_t (*relocatingcommit_done_cb)(struct lfs *lfs, lfs_ssize_t retval);
             lfs_mdir_t *dir;
             const lfs_block_t *pair[2];

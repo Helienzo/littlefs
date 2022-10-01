@@ -3632,25 +3632,64 @@ static int lfs_file_rawopen(lfs_t *lfs, lfs_file_t *file,
     int err = lfs_file_rawopencfg(lfs, file, path, flags, &defaults);
     return err;
 }
+// ********************* RAWCLOSE *********************
+static int rawclose_register_callback(lfs_t *lfs, lfs_ssize_t (*cb)(struct lfs *lfs, lfs_ssize_t retval));
+static int rawclose_sync_done(lfs_t *lfs, int retval);
 
-static int lfs_file_rawclose(lfs_t *lfs, lfs_file_t *file) {
-#ifndef LFS_READONLY
-    int err = lfs_file_rawsync(lfs, file);
-#else
-    int err = 0;
-#endif
-
-    // remove from list of mdirs
-    lfs_mlist_remove(lfs, (struct lfs_mlist*)file);
-
-    // clean up memory
-    if (!file->cfg->buffer) {
-        lfs_free(file->cache.buffer);
+static int rawclose_register_callback(lfs_t *lfs, lfs_ssize_t (*cb)(struct lfs *lfs, lfs_ssize_t retval)) {
+    if (cb != NULL) {
+        lfs->workspace.rawclose.rawclose_done_cb = cb;
+        return LFS_ERR_OK;
+    } else {
+        lfs->workspace.rawclose.rawclose_done_cb = NULL;
+        return LFS_ERR_INVAL;
     }
-
-    return err;
 }
 
+static int rawclose_sync_done(lfs_t *lfs, int retval) {
+    // Reset callback
+    rawsync_register_callback(lfs, NULL);
+
+    // remove from list of mdirs
+    lfs_mlist_remove(lfs, (struct lfs_mlist*)lfs->workspace.file);
+
+    // clean up memory
+    if (!lfs->workspace.file->cfg->buffer) {
+        lfs_free(lfs->workspace.file->cache.buffer);
+    }
+
+    if (lfs->workspace.rawclose.rawclose_done_cb  != NULL) {
+        // Call caller if this was a non blocking call
+        return lfs->workspace.rawclose.rawclose_done_cb(lfs, retval);
+    }
+    else {
+        return retval;
+    }
+}
+
+static int lfs_file_rawclose(lfs_t *lfs, lfs_file_t *file) {
+    // Store context
+    lfs->workspace.file = file;
+    lfs->workspace.lfs  = lfs;
+#ifndef LFS_READONLY
+    if (lfs->workspace.rawclose.rawclose_done_cb != NULL) {
+        // Register callback
+        rawsync_register_callback(lfs, rawclose_sync_done);
+        // Call non blocking function
+        return lfs_file_rawsync(lfs, file);
+    }
+    else
+    {
+        // Blocking call
+        int err = lfs_file_rawsync(lfs, file);
+        // Call next state
+        return rawclose_sync_done(lfs, err);
+    }
+#else
+    return rawclose_sync_done(lfs, 0);
+#endif
+}
+// ********************* RAWCLOSE *********************
 
 #ifndef LFS_READONLY
 static int lfs_file_relocate(lfs_t *lfs, lfs_file_t *file) {
@@ -6218,6 +6257,7 @@ int lfs_format(lfs_t *lfs, const struct lfs_config *cfg) {
     dir_relocatingcommit_register_callback(lfs, NULL);
     dir_splittingcompact_register_callback(lfs, NULL);
     dir_split_register_callback(lfs, NULL);
+    rawclose_register_callback(lfs, NULL);
 
     err = lfs_rawformat(lfs, cfg);
 
@@ -6434,6 +6474,17 @@ int lfs_file_opencfg(lfs_t *lfs, lfs_file_t *file,
     return err;
 }
 
+static int file_close_done(lfs_t *lfs, int retval) {
+    if (lfs->action_complete_cb != NULL) {
+        lfs->action_complete_cb(lfs, retval);
+    }
+    // Reset callback
+    rawclose_register_callback(lfs, NULL);
+    // Reset callback
+    lfs_register_command_done_callback(lfs, NULL);
+    return retval;
+}
+
 int lfs_file_close(lfs_t *lfs, lfs_file_t *file) {
     int err = LFS_LOCK(lfs->cfg);
     if (err) {
@@ -6441,6 +6492,12 @@ int lfs_file_close(lfs_t *lfs, lfs_file_t *file) {
     }
     LFS_TRACE("lfs_file_close(%p, %p)", (void*)lfs, (void*)file);
     LFS_ASSERT(lfs_mlist_isopen(lfs->mlist, (struct lfs_mlist*)file));
+
+    if (lfs->action_complete_cb != NULL) {
+        rawclose_register_callback(lfs, file_close_done);
+    } else {
+        rawclose_register_callback(lfs, NULL);
+    }
 
     err = lfs_file_rawclose(lfs, file);
 

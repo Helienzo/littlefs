@@ -144,7 +144,7 @@ lfs_ssize_t lfs_testbd_get_cb_val(void);
 bool lfs_testbd_call_queued(void);
 
 // Step the bd device during asyncronus work
-int lfs_testbd_step(void);
+bool lfs_testbd_step(void);
 
 #ifdef __cplusplus
 } /* extern "C" */

@@ -22,14 +22,19 @@ code = '''
         tmp_ret => size;
     }
 
+    lfs_register_command_done_callback(&lfs, lfs_testbd_action_complete_cb);
     lfs_file_close(&lfs, &file) => 0;
+    lfs_testbd_call_queued() => false;
+
     lfs_unmount(&lfs) => 0;
 
     lfs_mount(&lfs, &cfg) => 0;
     lfs_file_open(&lfs, &file, "hello", LFS_O_RDONLY) => 0;
     lfs_file_read(&lfs, &file, buffer, size) => size;
     assert(strcmp((char*)buffer, "Hello World!") == 0);
+    lfs_register_command_done_callback(&lfs, lfs_testbd_action_complete_cb);
     lfs_file_close(&lfs, &file) => 0;
+    lfs_testbd_call_queued() => false;
     lfs_unmount(&lfs) => 0;
 '''
 
@@ -64,7 +69,18 @@ code = '''
             tmp_ret => chunk;
         }
     }
-    lfs_file_close(&lfs, &file) => 0;
+    lfs_register_command_done_callback(&lfs, lfs_testbd_action_complete_cb);
+    int tmp_ret = lfs_file_close(&lfs, &file);
+
+    // Check if we have any queued calls
+    if (!lfs_testbd_call_queued()) {
+        tmp_ret => 0;
+    }
+    else {
+        while(lfs_testbd_step());
+        lfs_testbd_get_cb_val() => 0;
+    }
+
     lfs_unmount(&lfs) => 0;
 
     // read
@@ -80,7 +96,9 @@ code = '''
         }
     }
     lfs_file_read(&lfs, &file, buffer, CHUNKSIZE) => 0;
+    lfs_register_command_done_callback(&lfs, lfs_testbd_action_complete_cb);
     lfs_file_close(&lfs, &file) => 0;
+    lfs_testbd_call_queued() => false;
     lfs_unmount(&lfs) => 0;
 '''
 
@@ -117,7 +135,18 @@ code = '''
         }
 
     }
-    lfs_file_close(&lfs, &file) => 0;
+    lfs_register_command_done_callback(&lfs, lfs_testbd_action_complete_cb);
+    int tmp_ret = lfs_file_close(&lfs, &file);
+
+    // Check if we have any queued calls
+    if (!lfs_testbd_call_queued()) {
+        tmp_ret => 0;
+    }
+    else {
+        while(lfs_testbd_step());
+        lfs_testbd_get_cb_val() => 0;
+    }
+
     lfs_unmount(&lfs) => 0;
 
     // read
@@ -133,7 +162,9 @@ code = '''
         }
     }
     lfs_file_read(&lfs, &file, buffer, CHUNKSIZE) => 0;
+    lfs_register_command_done_callback(&lfs, lfs_testbd_action_complete_cb);
     lfs_file_close(&lfs, &file) => 0;
+    lfs_testbd_call_queued() => false;
     lfs_unmount(&lfs) => 0;
 
     // rewrite
@@ -146,7 +177,7 @@ code = '''
             buffer[b] = rand() & 0xff;
         }
         lfs_register_command_done_callback(&lfs, lfs_testbd_action_complete_cb);
-        int tmp_ret = lfs_file_write(&lfs, &file, buffer, chunk);
+        tmp_ret = lfs_file_write(&lfs, &file, buffer, chunk);
 
         // Check if we have any queued calls
         if (!lfs_testbd_call_queued()) {
@@ -162,7 +193,18 @@ code = '''
 
 
     }
-    lfs_file_close(&lfs, &file) => 0;
+    lfs_register_command_done_callback(&lfs, lfs_testbd_action_complete_cb);
+    tmp_ret = lfs_file_close(&lfs, &file);
+
+    // Check if we have any queued calls
+    if (!lfs_testbd_call_queued()) {
+        tmp_ret => 0;
+    }
+    else {
+        while(lfs_testbd_step());
+        lfs_testbd_get_cb_val() => 0;
+    }
+
     lfs_unmount(&lfs) => 0;
 
     // read
@@ -191,7 +233,9 @@ code = '''
         }
     }
     lfs_file_read(&lfs, &file, buffer, CHUNKSIZE) => 0;
+    lfs_register_command_done_callback(&lfs, lfs_testbd_action_complete_cb);
     lfs_file_close(&lfs, &file) => 0;
+    lfs_testbd_call_queued() => false;
     lfs_unmount(&lfs) => 0;
 '''
 

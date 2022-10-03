@@ -323,18 +323,17 @@ bool lfs_testbd_step(void) {
             prog_queued = false;
             int res = lfs_testbd_prog_blocking(glob_cfg, glob_block, glob_off, glob_buffer, glob_size);
             (*glob_cfg->current_lfs)->lfs_bd_callbacks.prog_cb(glob_cfg, res);
+            return true;
         }
 
         if (erase_queued) {
             erase_queued = false;
             int res = lfs_testbd_erase_blocking(glob_cfg, glob_block);
             (*glob_cfg->current_lfs)->lfs_bd_callbacks.erase_cb(glob_cfg, res);
+            return true;
         }
-        return true;
     }
-    else {
-        return false;
-    }
+    return false;
 }
 
 int lfs_testbd_erase(const struct lfs_config *cfg, lfs_block_t block) {

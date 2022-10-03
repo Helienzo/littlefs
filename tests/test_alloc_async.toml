@@ -27,7 +27,17 @@ code = '''
         }
     }
     for (int n = 0; n < FILES; n++) {
-        lfs_file_close(&lfs, &files[n]) => 0;
+        lfs_register_command_done_callback(&lfs, lfs_testbd_action_complete_cb);
+        int tmp_ret = lfs_file_close(&lfs, &files[n]);
+
+        // Check if we have any queued calls
+        if (!lfs_testbd_call_queued()) {
+            tmp_ret => 0;
+        }
+        else {
+            while(lfs_testbd_step());
+            lfs_testbd_get_cb_val() => 0;
+        }
     }
     lfs_unmount(&lfs) => 0;
 
@@ -40,7 +50,17 @@ code = '''
             lfs_file_read(&lfs, &file, buffer, size) => size;
             assert(memcmp(buffer, names[n], size) == 0);
         }
-        lfs_file_close(&lfs, &file) => 0;
+        lfs_register_command_done_callback(&lfs, lfs_testbd_action_complete_cb);
+        int tmp_ret = lfs_file_close(&lfs, &file);
+
+        // Check if we have any queued calls
+        if (!lfs_testbd_call_queued()) {
+            tmp_ret => 0;
+        }
+        else {
+            while(lfs_testbd_step());
+            lfs_testbd_get_cb_val() => 0;
+        }
     }
     lfs_unmount(&lfs) => 0;
 '''
@@ -66,7 +86,18 @@ code = '''
         for (int i = 0; i < SIZE; i += size) {
             lfs_file_write(&lfs, &file, buffer, size) => size;
         }
-        lfs_file_close(&lfs, &file) => 0;
+        lfs_register_command_done_callback(&lfs, lfs_testbd_action_complete_cb);
+        int tmp_ret = lfs_file_close(&lfs, &file);
+
+        // Check if we have any queued calls
+        if (!lfs_testbd_call_queued()) {
+            tmp_ret => 0;
+        }
+        else {
+            while(lfs_testbd_step());
+            lfs_testbd_get_cb_val() => 0;
+        }
+
         lfs_unmount(&lfs) => 0;
     }
 
@@ -79,7 +110,9 @@ code = '''
             lfs_file_read(&lfs, &file, buffer, size) => size;
             assert(memcmp(buffer, names[n], size) == 0);
         }
+        lfs_register_command_done_callback(&lfs, lfs_testbd_action_complete_cb);
         lfs_file_close(&lfs, &file) => 0;
+        lfs_testbd_call_queued() => false;
     }
     lfs_unmount(&lfs) => 0;
 '''
@@ -112,7 +145,18 @@ code = '''
             }
         }
         for (int n = 0; n < FILES; n++) {
-            lfs_file_close(&lfs, &files[n]) => 0;
+            lfs_register_command_done_callback(&lfs, lfs_testbd_action_complete_cb);
+            int tmp_ret = lfs_file_close(&lfs, &files[n]);
+
+            // Check if we have any queued calls
+            if (!lfs_testbd_call_queued()) {
+                tmp_ret => 0;
+            }
+            else {
+                while(lfs_testbd_step());
+                lfs_testbd_get_cb_val() => 0;
+            }
+
         }
         lfs_unmount(&lfs) => 0;
 
@@ -125,7 +169,9 @@ code = '''
                 lfs_file_read(&lfs, &file, buffer, size) => size;
                 assert(memcmp(buffer, names[n], size) == 0);
             }
+            lfs_register_command_done_callback(&lfs, lfs_testbd_action_complete_cb);
             lfs_file_close(&lfs, &file) => 0;
+            lfs_testbd_call_queued() => false;
         }
         lfs_unmount(&lfs) => 0;
 
@@ -163,7 +209,18 @@ code = '''
             for (int i = 0; i < SIZE; i += size) {
                 lfs_file_write(&lfs, &file, buffer, size) => size;
             }
-            lfs_file_close(&lfs, &file) => 0;
+            lfs_register_command_done_callback(&lfs, lfs_testbd_action_complete_cb);
+            int tmp_ret = lfs_file_close(&lfs, &file);
+
+            // Check if we have any queued calls
+            if (!lfs_testbd_call_queued()) {
+                tmp_ret => 0;
+            }
+            else {
+                while(lfs_testbd_step());
+                lfs_testbd_get_cb_val() => 0;
+            }
+
             lfs_unmount(&lfs) => 0;
         }
 
@@ -176,7 +233,9 @@ code = '''
                 lfs_file_read(&lfs, &file, buffer, size) => size;
                 assert(memcmp(buffer, names[n], size) == 0);
             }
+            lfs_register_command_done_callback(&lfs, lfs_testbd_action_complete_cb);
             lfs_file_close(&lfs, &file) => 0;
+            lfs_testbd_call_queued() => false;
         }
         lfs_unmount(&lfs) => 0;
 
@@ -215,7 +274,9 @@ code = '''
     }
     res => LFS_ERR_NOSPC;
 
+    lfs_register_command_done_callback(&lfs, lfs_testbd_action_complete_cb);
     lfs_file_close(&lfs, &file) => 0;
+    lfs_testbd_call_queued() => false;
     lfs_unmount(&lfs) => 0;
 
     lfs_mount(&lfs, &cfg) => 0;
@@ -224,7 +285,9 @@ code = '''
     lfs_file_size(&lfs, &file) => size;
     lfs_file_read(&lfs, &file, buffer, size) => size;
     memcmp(buffer, "exhaustion", size) => 0;
+    lfs_register_command_done_callback(&lfs, lfs_testbd_action_complete_cb);
     lfs_file_close(&lfs, &file) => 0;
+    lfs_testbd_call_queued() => false;
     lfs_unmount(&lfs) => 0;
 '''
 
@@ -240,7 +303,18 @@ code = '''
     for (int i = 0; i < SIZE; i += size) {
         lfs_file_write(&lfs, &file, buffer, size) => size;
     }
-    lfs_file_close(&lfs, &file) => 0;
+    lfs_register_command_done_callback(&lfs, lfs_testbd_action_complete_cb);
+    int tmp_ret = lfs_file_close(&lfs, &file);
+
+    // Check if we have any queued calls
+    if (!lfs_testbd_call_queued()) {
+        tmp_ret => 0;
+    }
+    else {
+        while(lfs_testbd_step());
+        lfs_testbd_get_cb_val() => 0;
+    }
+
     lfs_remove(&lfs, "padding") => 0;
 
     lfs_file_open(&lfs, &file, "exhaustion", LFS_O_WRONLY | LFS_O_CREAT);
@@ -264,7 +338,9 @@ code = '''
     }
     res => LFS_ERR_NOSPC;
 
+    lfs_register_command_done_callback(&lfs, lfs_testbd_action_complete_cb);
     lfs_file_close(&lfs, &file) => 0;
+    lfs_testbd_call_queued() => false;
     lfs_unmount(&lfs) => 0;
 
     lfs_mount(&lfs, &cfg) => 0;
@@ -273,7 +349,9 @@ code = '''
     lfs_file_size(&lfs, &file) => size;
     lfs_file_read(&lfs, &file, buffer, size) => size;
     memcmp(buffer, "exhaustion", size) => 0;
+    lfs_register_command_done_callback(&lfs, lfs_testbd_action_complete_cb);
     lfs_file_close(&lfs, &file) => 0;
+    lfs_testbd_call_queued() => false;
     lfs_remove(&lfs, "exhaustion") => 0;
     lfs_unmount(&lfs) => 0;
 '''
@@ -298,7 +376,9 @@ code = '''
         count += 1;
     }
     err => LFS_ERR_NOSPC;
+    lfs_register_command_done_callback(&lfs, lfs_testbd_action_complete_cb);
     lfs_file_close(&lfs, &file) => 0;
+    lfs_testbd_call_queued() => false;
 
     lfs_remove(&lfs, "exhaustion") => 0;
     lfs_remove(&lfs, "exhaustiondir") => 0;
@@ -308,7 +388,17 @@ code = '''
     for (int i = 0; i < count; i++) {
         lfs_file_write(&lfs, &file, buffer, size) => size;
     }
-    lfs_file_close(&lfs, &file) => 0;
+    lfs_register_command_done_callback(&lfs, lfs_testbd_action_complete_cb);
+    int tmp_ret = lfs_file_close(&lfs, &file);
+
+    // Check if we have any queued calls
+    if (!lfs_testbd_call_queued()) {
+        tmp_ret => 0;
+    }
+    else {
+        while(lfs_testbd_step());
+        lfs_testbd_get_cb_val() => 0;
+    }
 
     lfs_mkdir(&lfs, "exhaustiondir") => 0;
     lfs_remove(&lfs, "exhaustiondir") => 0;
@@ -319,7 +409,17 @@ code = '''
     for (int i = 0; i < count+1; i++) {
         lfs_file_write(&lfs, &file, buffer, size) => size;
     }
-    lfs_file_close(&lfs, &file) => 0;
+    lfs_register_command_done_callback(&lfs, lfs_testbd_action_complete_cb);
+    tmp_ret = lfs_file_close(&lfs, &file);
+
+    // Check if we have any queued calls
+    if (!lfs_testbd_call_queued()) {
+        tmp_ret => 0;
+    }
+    else {
+        while(lfs_testbd_step());
+        lfs_testbd_get_cb_val() => 0;
+    }
 
     lfs_mkdir(&lfs, "exhaustiondir") => LFS_ERR_NOSPC;
 
@@ -347,7 +447,9 @@ code = '''
         }
         filesize += size;
     }
+    lfs_register_command_done_callback(&lfs, lfs_testbd_action_complete_cb);
     lfs_file_close(&lfs, &file) => 0;
+    lfs_testbd_call_queued() => false;
     // now fill all but a couple of blocks of the filesystem with data
     filesize -= 3*LFS_BLOCK_SIZE;
     lfs_file_open(&lfs, &file, "pacman", LFS_O_WRONLY | LFS_O_CREAT) => 0;
@@ -356,7 +458,18 @@ code = '''
     for (lfs_size_t i = 0; i < filesize/size; i++) {
         lfs_file_write(&lfs, &file, buffer, size) => size;
     }
-    lfs_file_close(&lfs, &file) => 0;
+    lfs_register_command_done_callback(&lfs, lfs_testbd_action_complete_cb);
+    int tmp_ret = lfs_file_close(&lfs, &file);
+
+    // Check if we have any queued calls
+    if (!lfs_testbd_call_queued()) {
+        tmp_ret => 0;
+    }
+    else {
+        while(lfs_testbd_step());
+        lfs_testbd_get_cb_val() => 0;
+    }
+
     // also save head of file so we can error during lookahead scan
     lfs_block_t fileblock = file.ctz.head;
     lfs_unmount(&lfs) => 0;
@@ -377,7 +490,9 @@ code = '''
             break;
         }
     }
+    lfs_register_command_done_callback(&lfs, lfs_testbd_action_complete_cb);
     lfs_file_close(&lfs, &file) => 0;
+    lfs_testbd_call_queued() => false;
 
     // now reverse the "bad block" and try to write the file again until we
     // run out of space
@@ -392,7 +507,9 @@ code = '''
             break;
         }
     }
+    lfs_register_command_done_callback(&lfs, lfs_testbd_action_complete_cb);
     lfs_file_close(&lfs, &file) => 0;
+    lfs_testbd_call_queued() => false;
 
     lfs_unmount(&lfs) => 0;
 
@@ -406,7 +523,9 @@ code = '''
         lfs_file_read(&lfs, &file, rbuffer, size) => size;
         assert(memcmp(rbuffer, buffer, size) == 0);
     }
+    lfs_register_command_done_callback(&lfs, lfs_testbd_action_complete_cb);
     lfs_file_close(&lfs, &file) => 0;
+    lfs_testbd_call_queued() => false;
     lfs_unmount(&lfs) => 0;
 '''
 
@@ -442,7 +561,9 @@ code = '''
         count += 1;
     }
     err => LFS_ERR_NOSPC;
+    lfs_register_command_done_callback(&lfs, lfs_testbd_action_complete_cb);
     lfs_file_close(&lfs, &file) => 0;
+    lfs_testbd_call_queued() => false;
 
     lfs_remove(&lfs, "exhaustion") => 0;
     lfs_remove(&lfs, "exhaustiondir") => 0;
@@ -497,7 +618,9 @@ code = '''
 
     lfs_mkdir(&lfs, "exhaustiondir2") => LFS_ERR_NOSPC;
 
+    lfs_register_command_done_callback(&lfs, lfs_testbd_action_complete_cb);
     lfs_file_close(&lfs, &file) => 0;
+    lfs_testbd_call_queued() => false;
     lfs_unmount(&lfs) => 0;
 '''
 
@@ -515,7 +638,9 @@ code = '''
         memcpy(&buffer[i], "hi", 2);
     }
     lfs_file_write(&lfs, &file, buffer, cfg.block_size) => cfg.block_size;
+    lfs_register_command_done_callback(&lfs, lfs_testbd_action_complete_cb);
     lfs_file_close(&lfs, &file) => 0;
+    lfs_testbd_call_queued() => false;
 
     lfs_file_open(&lfs, &file, "exhaustion", LFS_O_WRONLY | LFS_O_CREAT);
     size = strlen("blahblahblahblah");
@@ -525,7 +650,17 @@ code = '''
             i += size) {
         lfs_file_write(&lfs, &file, buffer, size) => size;
     }
-    lfs_file_close(&lfs, &file) => 0;
+    lfs_register_command_done_callback(&lfs, lfs_testbd_action_complete_cb);
+    int tmp_ret = lfs_file_close(&lfs, &file);
+
+    // Check if we have any queued calls
+    if (!lfs_testbd_call_queued()) {
+        tmp_ret => 0;
+    }
+    else {
+        while(lfs_testbd_step());
+        lfs_testbd_get_cb_val() => 0;
+    }
 
     // remount to force reset of lookahead
     lfs_unmount(&lfs) => 0;
@@ -541,7 +676,9 @@ code = '''
         memcpy(&buffer[i], "hi", 2);
     }
     lfs_file_write(&lfs, &file, buffer, 2*cfg.block_size) => LFS_ERR_NOSPC;
+    lfs_register_command_done_callback(&lfs, lfs_testbd_action_complete_cb);
     lfs_file_close(&lfs, &file) => 0;
+    lfs_testbd_call_queued() => false;
 
     lfs_unmount(&lfs) => 0;
 '''
@@ -564,7 +701,17 @@ code = '''
             i += size) {
         lfs_file_write(&lfs, &file, buffer, size) => size;
     }
-    lfs_file_close(&lfs, &file) => 0;
+    lfs_register_command_done_callback(&lfs, lfs_testbd_action_complete_cb);
+    int tmp_ret = lfs_file_close(&lfs, &file);
+
+    // Check if we have any queued calls
+    if (!lfs_testbd_call_queued()) {
+        tmp_ret => 0;
+    }
+    else {
+        while(lfs_testbd_step());
+        lfs_testbd_get_cb_val() => 0;
+    }
 
     lfs_file_open(&lfs, &file, "exhaustion2",
             LFS_O_WRONLY | LFS_O_CREAT) => 0;
@@ -575,7 +722,17 @@ code = '''
             i += size) {
         lfs_file_write(&lfs, &file, buffer, size) => size;
     }
-    lfs_file_close(&lfs, &file) => 0;
+    lfs_register_command_done_callback(&lfs, lfs_testbd_action_complete_cb);
+    tmp_ret = lfs_file_close(&lfs, &file) => 0;
+
+    // Check if we have any queued calls
+    if (!lfs_testbd_call_queued()) {
+        tmp_ret => 0;
+    }
+    else {
+        while(lfs_testbd_step());
+        lfs_testbd_get_cb_val() => 0;
+    }
 
     // remount to force reset of lookahead
     lfs_unmount(&lfs) => 0;
@@ -594,7 +751,17 @@ code = '''
             i += size) {
         lfs_file_write(&lfs, &file, buffer, size) => size;
     }
-    lfs_file_close(&lfs, &file) => 0;
+    lfs_register_command_done_callback(&lfs, lfs_testbd_action_complete_cb);
+    tmp_ret = lfs_file_close(&lfs, &file) => 0;
+
+    // Check if we have any queued calls
+    if (!lfs_testbd_call_queued()) {
+        tmp_ret => 0;
+    }
+    else {
+        while(lfs_testbd_step());
+        lfs_testbd_get_cb_val() => 0;
+    }
 
     // rewrite second file, this requires lookahead does not
     // use old population
@@ -610,8 +777,18 @@ code = '''
             i += size) {
         lfs_file_write(&lfs, &file, buffer, size) => size;
     }
-    lfs_file_close(&lfs, &file) => 0;
 
+    lfs_register_command_done_callback(&lfs, lfs_testbd_action_complete_cb);
+    tmp_ret = lfs_file_close(&lfs, &file) => 0;
+
+    // Check if we have any queued calls
+    if (!lfs_testbd_call_queued()) {
+        tmp_ret => 0;
+    }
+    else {
+        while(lfs_testbd_step());
+        lfs_testbd_get_cb_val() => 0;
+    }
     lfs_unmount(&lfs) => 0;
 '''
 
@@ -633,7 +810,17 @@ code = '''
             i += size) {
         lfs_file_write(&lfs, &file, buffer, size) => size;
     }
-    lfs_file_close(&lfs, &file) => 0;
+    lfs_register_command_done_callback(&lfs, lfs_testbd_action_complete_cb);
+    int tmp_ret = lfs_file_close(&lfs, &file);
+
+    // Check if we have any queued calls
+    if (!lfs_testbd_call_queued()) {
+        tmp_ret => 0;
+    }
+    else {
+        while(lfs_testbd_step());
+        lfs_testbd_get_cb_val() => 0;
+    }
 
     lfs_file_open(&lfs, &file, "exhaustion2",
             LFS_O_WRONLY | LFS_O_CREAT) => 0;
@@ -644,7 +831,17 @@ code = '''
             i += size) {
         lfs_file_write(&lfs, &file, buffer, size) => size;
     }
-    lfs_file_close(&lfs, &file) => 0;
+    lfs_register_command_done_callback(&lfs, lfs_testbd_action_complete_cb);
+    tmp_ret = lfs_file_close(&lfs, &file) => 0;
+
+    // Check if we have any queued calls
+    if (!lfs_testbd_call_queued()) {
+        tmp_ret => 0;
+    }
+    else {
+        while(lfs_testbd_step());
+        lfs_testbd_get_cb_val() => 0;
+    }
 
     // remount to force reset of lookahead
     lfs_unmount(&lfs) => 0;
@@ -663,8 +860,17 @@ code = '''
             i += size) {
         lfs_file_write(&lfs, &file, buffer, size) => size;
     }
-    lfs_file_close(&lfs, &file) => 0;
+    lfs_register_command_done_callback(&lfs, lfs_testbd_action_complete_cb);
+    tmp_ret = lfs_file_close(&lfs, &file) => 0;
 
+    // Check if we have any queued calls
+    if (!lfs_testbd_call_queued()) {
+        tmp_ret => 0;
+    }
+    else {
+        while(lfs_testbd_step());
+        lfs_testbd_get_cb_val() => 0;
+    }
     // try to allocate a directory, should fail!
     lfs_mkdir(&lfs, "split") => LFS_ERR_NOSPC;
 
@@ -672,7 +878,9 @@ code = '''
     lfs_file_open(&lfs, &file, "notasplit",
             LFS_O_WRONLY | LFS_O_CREAT) => 0;
     lfs_file_write(&lfs, &file, "hi", 2) => 2;
+    lfs_register_command_done_callback(&lfs, lfs_testbd_action_complete_cb);
     lfs_file_close(&lfs, &file) => 0;
+    lfs_testbd_call_queued() => false;
 
     lfs_unmount(&lfs) => 0;
 '''

@@ -280,18 +280,11 @@ code = '''
         lfs_file_size(&lfs, &file) => SIZE;
 
         lfs_register_command_done_callback(&lfs, lfs_testbd_action_complete_cb);
-        int tmp_ret = lfs_file_sync(&lfs, &file);
+        lfs_file_sync(&lfs, &file);
+
         // Check if we have any queued calls
-        if (!lfs_testbd_call_queued()) {
-            tmp_ret => 0;
-        }
-        else {
-            while (lfs_testbd_call_queued()) {
-                lfs_testbd_step();
-            }
-            tmp_ret = lfs_testbd_get_cb_val();
-            tmp_ret => 0;
-        }
+        while (lfs_testbd_step());
+        lfs_testbd_get_cb_val() => 0;
 
         lfs_file_tell(&lfs, &file) => i+1;
         lfs_file_size(&lfs, &file) => SIZE;
@@ -385,19 +378,11 @@ code = '''
             assert(memcmp(buffer, "doggodogdog", size) == 0);
 
             lfs_register_command_done_callback(&lfs, lfs_testbd_action_complete_cb);
-            int tmp_ret = lfs_file_sync(&lfs, &file);
+            lfs_file_sync(&lfs, &file);
 
             // Check if we have any queued calls
-            if (!lfs_testbd_call_queued()) {
-                tmp_ret => 0;
-            }
-            else {
-                while (lfs_testbd_call_queued()) {
-                    lfs_testbd_step();
-                }
-                tmp_ret = lfs_testbd_get_cb_val();
-                tmp_ret => 0;
-            }
+            while (lfs_testbd_step());
+            lfs_testbd_get_cb_val() => 0;
 
             lfs_file_seek(&lfs, &file, off*size, LFS_SEEK_SET) => off*size;
             lfs_file_read(&lfs, &file, buffer, size) => size;

@@ -82,18 +82,12 @@ code = '''
     for (int j = 0; j < FILES; j++) {
         lfs_file_write(&lfs, &file, (const void*)"~", 1) => 1;
         lfs_register_command_done_callback(&lfs, lfs_testbd_action_complete_cb);
-        int tmp_ret = lfs_file_sync(&lfs, &file);
+        lfs_file_sync(&lfs, &file);
+
         // Check if we have any queued calls
-        if (!lfs_testbd_call_queued()) {
-            tmp_ret => 0;
-        }
-        else {
-            while (lfs_testbd_call_queued()) {
-                lfs_testbd_step();
-            }
-            tmp_ret = lfs_testbd_get_cb_val();
-            tmp_ret => 0;
-        }
+        while (lfs_testbd_step());
+        lfs_testbd_get_cb_val() => 0;
+
         sprintf(path, "%c", alphas[j]);
         lfs_remove(&lfs, path) => 0;
     }
@@ -210,19 +204,11 @@ code = '''
             if ((int)size <= i) {
                 lfs_file_write(&lfs, &files[j], &alphas[j], 1) => 1;
                 lfs_register_command_done_callback(&lfs, lfs_testbd_action_complete_cb);
-                int tmp_ret = lfs_file_sync(&lfs, &files[j]);
-                // Check if we have any queued calls
-                if (!lfs_testbd_call_queued()) {
-                    tmp_ret => 0;
-                }
-                else {
-                    while (lfs_testbd_call_queued()) {
-                        lfs_testbd_step();
-                    }
-                    tmp_ret = lfs_testbd_get_cb_val();
-                    tmp_ret => 0;
-                }
+                lfs_file_sync(&lfs, &files[j]);
 
+                // Check if we have any queued calls
+                while (lfs_testbd_step());
+                lfs_testbd_get_cb_val() => 0;
             }
         }
     }
